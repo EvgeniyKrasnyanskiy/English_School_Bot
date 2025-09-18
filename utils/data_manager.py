@@ -1,0 +1,147 @@
+import json
+import os
+import aiofiles
+from typing import Dict, Any
+
+STATS_FILE = "data/stats.json"
+
+async def load_stats() -> Dict[str, Any]:
+    if not os.path.exists(STATS_FILE):
+        return {}
+    async with aiofiles.open(STATS_FILE, 'r') as f:
+        content = await f.read()
+        return json.loads(content)
+
+async def save_stats(stats: Dict[str, Any]):
+    os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
+    async with aiofiles.open(STATS_FILE, 'w') as f:
+        await f.write(json.dumps(stats, indent=4))
+
+async def update_user_profile_data(user_id: str,
+                                   registered_name: str,
+                                   first_name: str | None = None,
+                                   last_name: str | None = None,
+                                   username: str | None = None):
+    all_stats = await load_stats()
+    user_stats = all_stats.get(user_id, {})
+
+    user_stats['registered_name'] = registered_name
+    user_stats['first_name'] = first_name
+    user_stats['last_name'] = last_name
+    user_stats['username'] = username
+    
+    all_stats[user_id] = user_stats
+    await save_stats(all_stats)
+
+async def calculate_overall_score_and_rank() -> list[Dict[str, Any]]:
+    all_stats = await load_stats()
+    user_scores = []
+
+    for user_id, stats in all_stats.items():
+        total_correct_answers = stats.get('total_correct_answers', 0)
+        best_test_score = stats.get('best_test_score', 0)
+        
+        total_game_correct = 0
+        if 'games_stats' in stats:
+            for game_type, game_data in stats['games_stats'].items():
+                total_game_correct += game_data.get('correct', 0)
+        
+        # Define the scoring mechanism
+        # Example: total_correct_answers + (correct_game_answers * 0.5) + best_test_score
+        overall_score = total_correct_answers + (total_game_correct * 0.5) + best_test_score
+
+        # Add bonus for best time in 'recall_typing' game
+        if 'games_stats' in stats and "recall_typing" in stats['games_stats']:
+            recall_typing_stats = stats['games_stats']["recall_typing"]
+            if 'best_time' in recall_typing_stats and recall_typing_stats['best_time'] is not None and recall_typing_stats['best_time'] > 0:
+                time_bonus_multiplier = 100 # Adjust this value to change the impact of time
+                overall_score += (1 / recall_typing_stats['best_time']) * time_bonus_multiplier
+        
+        user_scores.append({
+            'user_id': user_id,
+            'overall_score': overall_score,
+            'stats': stats, # Include original stats for potential future use
+            'registered_name': stats.get('registered_name'),
+            'first_name': stats.get('first_name'),
+            'last_name': stats.get('last_name'),
+            'username': stats.get('username')
+        })
+
+    # Sort users by overall score in descending order
+    user_scores.sort(key=lambda x: x['overall_score'], reverse=True)
+
+    # Assign ranks
+    for i, user_score_entry in enumerate(user_scores):
+        user_score_entry['rank'] = i + 1
+    
+    return user_scores
+
+async def update_user_stats(user_id: str, total_correct_answers: int, best_test_score: int, last_activity_date: str):
+    all_stats = await load_stats()
+    user_stats = all_stats.get(user_id, {})
+    user_stats['total_correct_answers'] = total_correct_answers
+    user_stats['best_test_score'] = best_test_score
+    user_stats['last_activity_date'] = last_activity_date
+    all_stats[user_id] = user_stats
+    await save_stats(all_stats)
+
+async def delete_user_stats_entry(user_id: str) -> bool:
+    all_stats = await load_stats()
+    if user_id in all_stats:
+        del all_stats[user_id]
+        await save_stats(all_stats)
+        return True
+    return False
+
+async def update_game_stats(user_id: str, game_type: str, is_correct: bool, last_activity_date: str, time_taken: float = None):
+    all_stats = await load_stats()
+    user_stats = all_stats.get(user_id, {})
+
+    if 'games_stats' not in user_stats:
+        user_stats['games_stats'] = {}
+
+    if game_type not in user_stats['games_stats']:
+        user_stats['games_stats'][game_type] = {
+            'played': 0,
+            'correct': 0,
+            'incorrect': 0
+        }
+        if game_type == "recall_typing":
+            user_stats['games_stats'][game_type]['best_time'] = float('inf')
+
+    if game_type == "recall_typing":
+        # Ensure best_time is initialized before comparison, even if game_type existed previously
+        if user_stats['games_stats'][game_type].get('best_time') is None:
+            user_stats['games_stats'][game_type]['best_time'] = float('inf')
+
+        if time_taken is not None and time_taken < user_stats['games_stats'][game_type]['best_time']:
+            user_stats['games_stats'][game_type]['best_time'] = time_taken
+
+    user_stats['games_stats'][game_type]['played'] += 1
+    if is_correct:
+        user_stats['games_stats'][game_type]['correct'] += 1
+    else:
+        user_stats['games_stats'][game_type]['incorrect'] += 1
+    
+    user_stats['last_activity_date'] = last_activity_date
+    all_stats[user_id] = user_stats
+    await save_stats(all_stats)
+
+IMAGE_DIR = "data/images"
+SOUNDS_DIR = "data/sounds"
+
+async def get_image_filepath(word: str) -> str | None:
+    # Supported image extensions (add more if needed)
+    for ext in ['.png', '.jpg', '.jpeg', '.gif']:
+        filepath = os.path.join(IMAGE_DIR, f"{word.lower()}{ext}")
+        if os.path.exists(filepath):
+            return filepath
+    return None
+
+async def get_audio_filepath(word: str) -> str | None:
+    # Supported audio extensions (add more if needed)
+    for ext in ['.mp3', '.ogg', '.wav']:
+        filepath = os.path.join(SOUNDS_DIR, f"{word.lower()}{ext}")
+        if os.path.exists(filepath):
+            return filepath
+    return None

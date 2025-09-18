@@ -1,0 +1,6 @@
+aiogram==3.0.0b6
+# Or latest stable version if user is running this later.
+# This specific version is chosen for compatibility during development.
+# aiosqlite for database interactions
+aiosqlite
+aiofiles==22.1.0
