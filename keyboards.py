@@ -4,7 +4,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 main_menu_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📚 Учить слова"), KeyboardButton(text="🎮 Игры")],
-        [KeyboardButton(text="📝 Проверка знаний"), KeyboardButton(text="📊 Статистика")],
+        [KeyboardButton(text="📝 Тест знаний"), KeyboardButton(text="📊 Статистика")],
         [KeyboardButton(text="❓ Справка"), KeyboardButton(text="🧹 Очистить чат")],
         [KeyboardButton(text="⬆️ В главное меню")]
     ],
@@ -41,7 +41,8 @@ def quiz_options_keyboard(options: list[str], correct_option: str):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
     row = []
     for i, option in enumerate(options):
-        callback_data = f"quiz_answer_{'correct' if option == correct_option else 'incorrect'}_{option}"
+        # Store options in state and use index for callback_data
+        callback_data = f"quiz_answer_{i}_{'correct' if option == correct_option else 'incorrect'}"
         row.append(InlineKeyboardButton(text=f"▪️ {option}", callback_data=callback_data))
         if len(row) == 2 or i == len(options) - 1:
             keyboard.inline_keyboard.append(row)
@@ -50,4 +51,33 @@ def quiz_options_keyboard(options: list[str], correct_option: str):
 
 start_recall_typing_keyboard = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Начать", callback_data="start_recall_typing_countdown")]
+])
+
+# Клавиатура для подтверждения создания пользовательского набора слов
+confirm_create_set_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="Да, создать мой набор!", callback_data="create_my_word_set")],
+    [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_create_word_set")]
+])
+
+# Клавиатура для управления пользовательским набором слов
+my_set_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="➕ Добавить слово", callback_data="add_my_word")],
+    [InlineKeyboardButton(text="➖ Удалить слово", callback_data="del_my_word")],
+    [InlineKeyboardButton(text="📖 Показать список слов", callback_data="show_my_word_list")],
+    [InlineKeyboardButton(text="⬆️ В главное меню", callback_data="back_to_main_from_my_set")]
+])
+
+def create_file_selection_keyboard(available_files: list[str], current_file: str) -> InlineKeyboardMarkup:
+    """Создает InlineKeyboardMarkup для выбора файлов со словами."""
+    keyboard = []
+    for file in available_files:
+        text = f"{file} ✅ (текущий)" if file == current_file else file
+        keyboard.append([InlineKeyboardButton(text=text, callback_data=f"select_file_{file}")])
+    
+    keyboard.append([InlineKeyboardButton(text="⬆️ В главное меню", callback_data="back_to_main_from_my_set_select_file")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+# Клавиатура для отмены ввода имени файла при добавлении нового аудио
+cancel_keyboard_for_filename = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_audio_filename_entry")]
 ])

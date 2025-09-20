@@ -4,11 +4,14 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from utils.utils import load_words, get_quiz_options
+from utils.utils import get_quiz_options
 from database import save_test_result, update_last_active
 from keyboards import main_menu_keyboard, quiz_options_keyboard
 from utils.data_manager import load_stats, update_user_stats
+from utils.word_manager import word_manager # Импортируем word_manager
+from aiogram import Bot # Добавлено для явной передачи bot
 from config import TEST_QUESTIONS_COUNT
+from utils.audio_cleanup import cleanup_guess_audio
 import datetime
 import asyncio
 import logging
@@ -20,24 +23,42 @@ class TestKnowledge(StatesGroup):
     question_num = State()
     correct_answers = State()
 
-@router.message(F.text == "📝 Проверка знаний")
-async def start_knowledge_test(message: Message, state: FSMContext):
+@router.message(F.text == "📝 Тест знаний")
+async def start_test(message: Message, state: FSMContext, bot: Bot):
+    # Удаляем аудиофайлы из игры "Угадай слово" при переходе к тесту
+    await cleanup_guess_audio(message, state, bot)
     user_id = str(message.from_user.id)
     logging.info(f"[handlers/test.py] Starting test for user ID: {user_id}")
     await update_last_active(int(user_id))
     
-    words = load_words()
+    words = word_manager.load_words(user_id)
+    
+    # Определяем количество вопросов для теста
+    num_questions = min(len(words), TEST_QUESTIONS_COUNT)
+
+    if not words:
+        await message.answer("В выбранном наборе слов нет слов для проведения теста. Пожалуйста, выберите другой набор или добавьте слова.", reply_markup=main_menu_keyboard)
+        await state.clear()
+        return
+
+    if num_questions == 0:
+        await message.answer("В выбранном наборе слов недостаточно слов для проведения теста. Пожалуйста, выберите другой набор или добавьте слова.", reply_markup=main_menu_keyboard)
+        await state.clear()
+        return
+
     await state.set_state(TestKnowledge.in_test)
     await state.update_data(
         user_id=user_id,
         question_num=0,
         correct_answers=0,
-        test_words=random.sample(words, TEST_QUESTIONS_COUNT),
+        num_questions=num_questions, # Сохраняем актуальное количество вопросов
+        test_words=random.sample(words, num_questions),
         all_words=words,
-        test_sent_message_ids=[]
+        test_sent_message_ids=[],
+        start_time=datetime.datetime.now() # Добавляем время начала теста
     )
     
-    await message.answer(f"Начинаем тест! Ответьте на {TEST_QUESTIONS_COUNT} вопросов.")
+    await message.answer(f"Начинаем тест! Ответьте на {num_questions} вопросов.")
     await send_test_question(message, state)
 
 async def send_test_question(message: Message, state: FSMContext):
@@ -45,6 +66,7 @@ async def send_test_question(message: Message, state: FSMContext):
     question_num = state_data['question_num']
     test_words = state_data['test_words']
     words = state_data['all_words']
+    actual_num_questions = state_data['num_questions'] # Получаем актуальное количество вопросов
     # Delete previously sent test messages (to keep chat clean)
     previous_ids = state_data.get('test_sent_message_ids', [])
     if previous_ids:
@@ -62,17 +84,21 @@ async def send_test_question(message: Message, state: FSMContext):
         except Exception:
             pass
 
-    if question_num < TEST_QUESTIONS_COUNT:
+    if question_num < actual_num_questions:
         current_word_data = test_words[question_num]
         english_word = current_word_data['en']
         russian_translation = current_word_data['ru']
         
         options = get_quiz_options(russian_translation, words)
         
-        await state.update_data(current_test_word_ru=russian_translation, current_test_word_en=english_word)
+        await state.update_data(
+            current_test_word_ru=russian_translation, 
+            current_test_word_en=english_word,
+            quiz_options=options # Сохраняем опции в состоянии
+        )
 
         word_msg = await message.answer(
-            f"Вопрос {question_num + 1}/{TEST_QUESTIONS_COUNT}: *{english_word}*",
+            f"Вопрос {question_num + 1}/{actual_num_questions}: *{english_word}*",
             reply_markup=main_menu_keyboard, # Keep main menu visible
             parse_mode="Markdown"
         )
@@ -88,14 +114,18 @@ async def send_test_question(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("quiz_answer_"), TestKnowledge.in_test)
 async def process_test_answer(callback: CallbackQuery, state: FSMContext):
     data = callback.data.split('_')
-    is_correct = data[2] == 'correct'
-    chosen_answer = data[3]
+    chosen_option_index = int(data[2]) # Индекс выбранной опции
     
     state_data = await state.get_data()
     question_num = state_data['question_num']
     correct_answers = state_data['correct_answers']
     correct_russian_word = state_data['current_test_word_ru']
     english_word = state_data['current_test_word_en']
+    quiz_options = state_data['quiz_options'] # Получаем опции из состояния
+    actual_num_questions = state_data['num_questions'] # Получаем актуальное количество вопросов
+
+    chosen_answer = quiz_options[chosen_option_index]
+    is_correct = (chosen_answer == correct_russian_word) # Определяем правильность ответа
 
     if is_correct:
         correct_answers += 1
@@ -104,7 +134,7 @@ async def process_test_answer(callback: CallbackQuery, state: FSMContext):
         answer_feedback = f"❌ Неверно. Правильный ответ: *{correct_russian_word}*"
     
     await callback.message.edit_text(
-        f"Вопрос {question_num + 1}/{TEST_QUESTIONS_COUNT}: *{english_word}*"
+        f"Вопрос {question_num + 1}/{actual_num_questions}: *{english_word}*"
         f"\nВаш ответ: *{chosen_answer}* - {answer_feedback}",
         parse_mode="Markdown"
     )
@@ -112,18 +142,41 @@ async def process_test_answer(callback: CallbackQuery, state: FSMContext):
     question_num += 1
     await state.update_data(question_num=question_num, correct_answers=correct_answers)
 
-    if question_num < TEST_QUESTIONS_COUNT:
+    if question_num < actual_num_questions:
         await send_test_question(callback.message, state)
     else:
         await finish_test(callback.message, state)
     
     await callback.answer() # Close the processing of the callback query
 
+@router.message(F.text == "⬆️ В главное меню", TestKnowledge.in_test)
+async def back_to_main_from_test(message: Message, state: FSMContext):
+    # Clean up any lingering test messages
+    state_data = await state.get_data()
+    previous_ids = state_data.get('test_sent_message_ids', [])
+    if previous_ids:
+        try:
+            await asyncio.sleep(0.1) # Small delay to ensure UI updates
+            bot = message.bot
+            if bot:
+                for mid in previous_ids:
+                    try:
+                        await bot.delete_message(chat_id=message.chat.id, message_id=mid)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    
+    await state.clear()
+    await message.answer("Вы вернулись в главное меню.", reply_markup=main_menu_keyboard)
+
 async def finish_test(message: Message, state: FSMContext):
     state_data = await state.get_data()
     correct_answers = state_data['correct_answers']
     user_id = state_data['user_id']
-    logging.info(f"[handlers/test.py] Finishing test for user ID from state: {user_id}")
+    start_time = state_data['start_time'] # Получаем время начала
+    actual_num_questions = state_data['num_questions'] # Получаем актуальное количество вопросов
+    test_duration = (datetime.datetime.now() - start_time).total_seconds() # Рассчитываем продолжительность
 
     # Clean up last question messages if any
     try:
@@ -141,32 +194,36 @@ async def finish_test(message: Message, state: FSMContext):
     except Exception:
         pass
 
-    await save_test_result(int(user_id), correct_answers, TEST_QUESTIONS_COUNT)
+    await save_test_result(int(user_id), correct_answers, actual_num_questions)
 
+    # Загружаем самые актуальные данные статистики перед окончательным обновлением
     all_stats = await load_stats()
-    logging.info(f"[handlers/test.py] Loaded all stats before update: {all_stats}")
     user_stats = all_stats.get(user_id, {})
-    # Ensure all relevant fields exist with default values if not present
+
     user_stats.setdefault('total_correct_answers', 0)
     user_stats.setdefault('best_test_score', 0)
     user_stats.setdefault('last_activity_date', "N/A")
-    logging.info(f"[handlers/test.py] Existing user stats for {user_id}: {user_stats}")
+    user_stats.setdefault('best_test_time', float('inf')) # Инициализируем лучшее время
 
     user_stats['total_correct_answers'] += correct_answers
     if correct_answers > user_stats['best_test_score']:
         user_stats['best_test_score'] = correct_answers
     user_stats['last_activity_date'] = datetime.datetime.now().isoformat()
+    
+    if test_duration < user_stats['best_test_time']:
+        user_stats['best_test_time'] = test_duration
 
-    logging.info(f"[handlers/test.py] Updated user stats for {user_id}: {user_stats}")
+    # Сохраняем обновленные данные в stats.json
     await update_user_stats(
         user_id,
         user_stats['total_correct_answers'],
         user_stats['best_test_score'],
-        user_stats['last_activity_date']
+        user_stats['last_activity_date'],
+        user_stats['best_test_time'] # Передаем лучшее время
     )
 
     await message.answer(
-        f"Тест завершен! Вы ответили правильно на *{correct_answers}* из *{TEST_QUESTIONS_COUNT}* вопросов.",
+        f"Тест завершен! Вы ответили правильно на *{correct_answers}* из *{actual_num_questions}* вопросов.",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard
     )

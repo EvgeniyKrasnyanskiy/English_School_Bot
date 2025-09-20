@@ -1,23 +1,25 @@
 import random
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import Message, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from utils.utils import load_words, get_random_word
+from utils.utils import get_random_word
 from keyboards import learn_words_keyboard, main_menu_keyboard
 from utils.data_manager import get_image_filepath, get_audio_filepath
+from utils.audio_cleanup import cleanup_guess_audio
+from utils.word_manager import word_manager # Импортируем word_manager
+from database import update_last_active
+import asyncio
 
 router = Router()
 
 class LearnWords(StatesGroup):
     viewing_flashcard = State()
 
-async def cleanup_old_audio_messages(message: Message):
+async def cleanup_old_audio_messages(message: Message, bot: Bot):
     """Try to delete recent audio messages from previous sessions"""
     try:
-        from aiogram import Bot
-        bot = Bot.get_current()
         if not bot:
             return
             
@@ -44,19 +46,18 @@ async def cleanup_old_audio_messages(message: Message):
                 # This is expected, so we continue silently
                 pass
                 
-        if deleted_count > 0:
-            print(f"Cleaned up {deleted_count} old messages")
-            
-    except Exception as e:
-        print(f"Error during cleanup: {e}")
+    except Exception:
+        pass
 
 @router.message(F.text == "📚 Учить слова")
-async def cmd_learn_words(message: Message, state: FSMContext):
+async def cmd_learn_words(message: Message, state: FSMContext, bot: Bot):
+    # Удаляем аудиофайлы из игры "Угадай слово" при переходе к изучению слов
+    await cleanup_guess_audio(message, state, bot)
     await state.set_state(LearnWords.viewing_flashcard)
-    await send_flashcard(message, state)
+    await send_flashcard(message, state, bot)
 
-async def send_flashcard(message: Message, state: FSMContext, random_word: bool = False):
-    words = load_words() # Load words every time
+async def send_flashcard(message: Message, state: FSMContext, bot: Bot, random_word: bool = False):
+    words = word_manager.load_words(int(message.from_user.id)) # Load words every time
     current_words = await state.get_data()
     word_index = current_words.get("word_index", -1)
 
@@ -71,12 +72,10 @@ async def send_flashcard(message: Message, state: FSMContext, random_word: bool 
     if previous_audio_ids:
         for msg_id in previous_audio_ids:
             try:
-                from aiogram import Bot
-                bot = Bot.get_current()
                 if bot:
                     await bot.delete_message(chat_id=message.chat.id, message_id=msg_id)
             except Exception as e:
-                print(f"Error deleting audio message {msg_id}: {e}")
+                pass
     sent_audio_ids = []
 
     # Check for image and send if exists
@@ -104,8 +103,8 @@ async def send_flashcard(message: Message, state: FSMContext, random_word: bool 
     await state.update_data(current_word=word, word_index=word_index, sent_audio_ids=sent_audio_ids)
 
 @router.message(F.text == "➡️ Следующее слово", LearnWords.viewing_flashcard)
-async def next_word(message: Message, state: FSMContext):
-    words = load_words() # Load words every time
+async def next_word(message: Message, state: FSMContext, bot: Bot):
+    words = word_manager.load_words(message.from_user.id) # Load words every time
     current_words_data = await state.get_data()
     current_index = current_words_data.get("word_index", -1)
     
@@ -114,30 +113,30 @@ async def next_word(message: Message, state: FSMContext):
         next_index = 0 # Loop back to the beginning
 
     await state.update_data(word_index=next_index)
-    await send_flashcard(message, state)
+    await send_flashcard(message, state, bot)
 
 
 @router.message(F.text == "🎲 Случайное слово", LearnWords.viewing_flashcard)
-async def random_word(message: Message, state: FSMContext):
-    await send_flashcard(message, state, random_word=True)
+async def random_word(message: Message, state: FSMContext, bot: Bot):
+    await send_flashcard(message, state, bot, random_word=True)
 
 @router.message(F.text == "⬆️ В главное меню", LearnWords.viewing_flashcard)
-async def back_to_main_from_learn(message: Message, state: FSMContext):
+async def back_to_main_from_learn(message: Message, state: FSMContext, bot: Bot):
     current_words_data = await state.get_data()
     previous_audio_ids = current_words_data.get("sent_audio_ids", [])
     for msg_id in previous_audio_ids:
         try:
-            from aiogram import Bot
-            bot = Bot.get_current()
             if bot:
                 await bot.delete_message(chat_id=message.chat.id, message_id=msg_id)
-        except Exception as e:
-            print(f"Error deleting audio message: {e}")
-    await state.clear()
+        except Exception:
+            pass
+    await state.clear() # Перемещено в конец после очистки аудио
     await message.answer("Вы вернулись в главное меню.", reply_markup=main_menu_keyboard)
 
 @router.message(F.text == "🧹 Очистить чат")
-async def cleanup_chat(message: Message):
+async def cleanup_chat(message: Message, bot: Bot):
     """Manual cleanup command for users"""
-    await cleanup_old_audio_messages(message)
-    await message.answer("Попытка очистки старых сообщений завершена. Возможно, не все сообщения были удалены. Вы можете самостоятельно очистить историю чата в меню Telegram. \n\nИспользуйте команду /start если не отображаются кнопки или попробуйте перезапустить бота.")
+    status_message = await message.answer("Пытаюсь чистить чат, ждите...")
+    await cleanup_old_audio_messages(message, bot)
+    await status_message.edit_text("Чистка закончена! Но возможно не все сообщения были удалены.")
+    await message.answer("Вы можете самостоятельно очистить всю историю чата в меню Telegram. \n\nИспользуйте команду /start если не отображаются кнопки или попробуйте перезапустить бота.")

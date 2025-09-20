@@ -1,17 +1,13 @@
 import random
 import json
+from .word_manager import word_manager
+import os
 
 def shuffle_word(word: str) -> str:
     """Shuffles the letters of a word."""
     word_list = list(word)
     random.shuffle(word_list)
     return "".join(word_list)
-
-def load_words(file_path: str = 'data/words.json'):
-    """Loads words from a JSON file."""
-    with open(file_path, 'r', encoding='utf-8') as f:
-        words = json.load(f)
-    return words
 
 def get_random_word(words: list):
     """Returns a random word from the loaded words."""
@@ -29,25 +25,15 @@ def get_quiz_options(correct_word_ru: str, all_words: list, num_options: int = 4
     random.shuffle(options)
     return options
 
-async def add_word(new_word: dict, file_path: str = 'data/words.json'):
-    """Adds a new word to the JSON file."""
-    words = load_words(file_path) # Load current words
-    words.append(new_word)
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(words, f, ensure_ascii=False, indent=4)
+async def add_word(new_word: dict, filename: str = "words.json") -> bool:
+    """Adds a new word to the specified file."""
+    return word_manager.add_word_to_file(filename, new_word)
 
-async def get_words_alphabetical(file_path: str = 'data/words.json') -> list[dict]:
-    """Loads words from a JSON file and returns them sorted alphabetically by English word."""
-    words = load_words(file_path)
+async def get_words_alphabetical(filename: str = "words.json") -> list[dict]:
+    """Loads words from the specified file and returns them sorted alphabetically by English word."""
+    words = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, filename))
     return sorted(words, key=lambda x: x['en'].lower())
 
-async def delete_word(word_to_delete_en: str, file_path: str = 'data/words.json') -> bool:
-    """Deletes a word from the JSON file by its English representation."""
-    words = load_words(file_path)
-    initial_len = len(words)
-    words = [word for word in words if word['en'].lower() != word_to_delete_en.lower()]
-    if len(words) < initial_len:
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(words, f, ensure_ascii=False, indent=4)
-        return True
-    return False
+async def delete_word(word_to_delete_en: str, filename: str = "words.json") -> bool:
+    """Deletes a word from the specified file by its English representation."""
+    return word_manager.delete_word_from_file(filename, word_to_delete_en)

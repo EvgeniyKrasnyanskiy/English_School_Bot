@@ -5,15 +5,19 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from utils.utils import load_words, get_random_word, shuffle_word, get_quiz_options
+from utils.utils import get_random_word, shuffle_word, get_quiz_options
 import uuid
 from database import update_last_active
 from keyboards import games_menu_keyboard, main_menu_keyboard, quiz_options_keyboard, start_recall_typing_keyboard
 from utils.data_manager import load_stats, update_user_stats, update_game_stats
 import datetime
-from handlers.stats import get_formatted_statistics # Import the new function
+from handlers.stats import show_statistics_handler # Import the function for unified stats display
 import asyncio
 from config import RECALL_TYPING_COUNTDOWN_SECONDS # Import countdown seconds
+from utils.audio_cleanup import cleanup_guess_audio
+from aiogram import Bot # Добавлено для явной передачи bot
+from utils.word_manager import word_manager # Импортируем word_manager
+from config import TEST_QUESTIONS_COUNT
 
 router = Router()
 
@@ -34,8 +38,8 @@ async def cmd_games(message: Message, state: FSMContext):
 # --- Guess the Word (by Audio) ---
 @router.message(F.text == "🎧 Угадай слово", Games.in_games_menu)
 async def start_guess_word_game(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    words = load_words()
+    user_id = message.from_user.id
+    words = word_manager.load_words(user_id)
     await state.set_state(Games.quiz_guess_word)
     await state.update_data(user_id=user_id, all_words=words)
     await message.answer("Прослушайте аудио и угадайте слово.")
@@ -49,35 +53,33 @@ async def send_guess_word_question(message: Message, state: FSMContext):
     # Build 3 distractors in Russian, 1 correct in Russian
     options = get_quiz_options(word['ru'], words)
 
-    # Save current word
-    await state.update_data(current_guess_word_en=word['en'])
+    # Save current word and options for later validation
+    await state.update_data(
+        current_guess_word_en=word['en'],
+        current_guess_word_ru=word['ru'],
+        quiz_options=options
+    )
 
     # Try to send audio for the word if exists via data_manager like in learn
     from aiogram.types import FSInputFile
     from utils.data_manager import get_audio_filepath
     audio_path = await get_audio_filepath(word['en'])
     if audio_path:
-        # Best-effort: delete previous audios tracked in this module to avoid autoplay
-        current_data = await state.get_data()
-        previous_audio_ids = current_data.get("guess_sent_audio_ids", [])
-        if previous_audio_ids:
-            from aiogram import Bot
-            bot = Bot.get_current()
-            if bot:
-                for msg_id in previous_audio_ids:
-                    try:
-                        await bot.delete_message(chat_id=message.chat.id, message_id=msg_id)
-                    except Exception:
-                        pass
         obfuscated_filename = f"{uuid.uuid4().hex}.mp3"
         sent_audio = await message.answer_audio(
             audio=FSInputFile(audio_path, filename=obfuscated_filename),
             title="Задание",
             performer="",
         )
-        await state.update_data(guess_sent_audio_ids=[sent_audio.message_id])
+        # Re-fetch state data to ensure we have the most up-to-date list of audio IDs
+        current_audio_ids = (await state.get_data()).get("guess_sent_audio_ids", [])
+        current_audio_ids.append(sent_audio.message_id)
+        await state.update_data(guess_sent_audio_ids=current_audio_ids)
     else:
-        await message.answer("Аудио не найдено, попробуйте угадать по памяти.")
+        await message.answer("Извините, для этого слова аудиофайл не найден. Пожалуйста, выберите другую игру или свяжитесь с администратором для обновления файлов со словами для обучения.",
+                             reply_markup=main_menu_keyboard)
+        await state.clear()
+        return # Прекращаем выполнение функции, так как аудиофайла нет
 
     await message.answer(
         "Выберите правильный перевод на русский:",
@@ -88,13 +90,19 @@ async def send_guess_word_question(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("quiz_answer_"), Games.quiz_guess_word)
 async def process_guess_word_answer(callback: CallbackQuery, state: FSMContext):
     data = callback.data.split('_')
-    is_correct = data[2] == 'correct'
-    chosen_answer = data[3]
+    # The index of the chosen option is at data[2], and is_correct flag is at data[3]
+    chosen_option_index = int(data[2])
+    is_correct_flag = data[3]
 
     state_data = await state.get_data()
     user_id = state_data['user_id']
     correct_english_word = state_data['current_guess_word_en']
+    correct_russian_word = state_data['current_guess_word_ru']
+    quiz_options = state_data['quiz_options']
     current_date = datetime.datetime.now().isoformat()
+
+    chosen_answer = quiz_options[chosen_option_index] # Get the actual text of the chosen answer
+    is_correct = (chosen_answer == correct_russian_word)
 
     if is_correct:
         await callback.answer("Верно!", show_alert=False)
@@ -106,7 +114,7 @@ async def process_guess_word_answer(callback: CallbackQuery, state: FSMContext):
     else:
         await callback.answer("Неверно.", show_alert=False)
         await callback.message.edit_text(
-            f"Слово по аудио: *{correct_english_word}*\nВаш ответ: *{chosen_answer}* - ❌ Неверно.",
+            f"Слово по аудио: *{correct_english_word}*\nВаш ответ: *{chosen_answer}* - ❌ Неверно. Правильный ответ: *{correct_russian_word}*",
             parse_mode="Markdown"
         )
         await update_game_stats(user_id, "guess_word", False, current_date)
@@ -114,24 +122,32 @@ async def process_guess_word_answer(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "Хотите еще раз сыграть?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Да, еще раз!", callback_data="play_guess_word_again"),
-             InlineKeyboardButton(text="Нет, завершить", callback_data="finish_game_show_stats")]
+            [InlineKeyboardButton(text="Нет, завершить", callback_data="finish_game_show_stats"),
+             InlineKeyboardButton(text="Да, еще раз!", callback_data="play_guess_word_again")]
         ])
     )
+    '''
+    await callback.message.answer(
+        "Или вернитесь в главное меню.",
+        reply_markup=main_menu_keyboard
+    )
+    '''
 
 @router.callback_query(F.data == "play_guess_word_again", Games.quiz_guess_word)
-async def play_guess_word_again(callback: CallbackQuery, state: FSMContext):
+async def play_guess_word_again(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await callback.answer()
     state_data = await state.get_data()
     user_id = state_data['user_id']
     await update_last_active(int(user_id))
+    await cleanup_guess_audio(callback.message, state, bot) # Удаляем предыдущий аудиофайл
+    await state.set_state(Games.quiz_guess_word) # Добавлено: Явно устанавливаем состояние
     await send_guess_word_question(callback.message, state)
 
 # --- Choose Translation Quiz ---
 @router.message(F.text == "🤔 Выбери перевод", Games.in_games_menu)
 async def start_choose_translation_quiz(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    words = load_words()
+    user_id = message.from_user.id
+    words = word_manager.load_words(user_id)
     await state.set_state(Games.quiz_choose_translation)
     await state.update_data(user_id=user_id, all_words=words)
     await message.answer("Выберите правильный перевод слова.")
@@ -143,7 +159,11 @@ async def send_choose_translation_question(message: Message, state: FSMContext):
     word = get_random_word(words)
     options = get_quiz_options(word['ru'], words)
     
-    await state.update_data(current_quiz_word_en=word['en'], current_quiz_word_ru=word['ru'])
+    await state.update_data(
+        current_quiz_word_en=word['en'],
+        current_quiz_word_ru=word['ru'],
+        quiz_options=options # Store options for later validation
+    )
 
     await message.answer(
         f"Слово: *{word['en']}*",
@@ -157,7 +177,9 @@ async def send_choose_translation_question(message: Message, state: FSMContext):
     )
 
 @router.message(F.text == "📊 Статистика", Games.quiz_choose_translation)
-async def handle_stats_button_in_choose_translation(message: Message, state: FSMContext):
+async def handle_stats_button_in_choose_translation(message: Message, state: FSMContext, bot: Bot):
+    # Удаляем аудиофайлы из игры "Угадай слово" перед переходом к статистике
+    await cleanup_guess_audio(message, state, bot)
     await state.clear()
     await message.answer("Вы вернулись в главное меню.", reply_markup=main_menu_keyboard)
 
@@ -165,14 +187,19 @@ async def handle_stats_button_in_choose_translation(message: Message, state: FSM
 @router.callback_query(F.data.startswith("quiz_answer_"), Games.quiz_choose_translation)
 async def process_choose_translation_answer(callback: CallbackQuery, state: FSMContext):
     data = callback.data.split('_')
-    is_correct = data[2] == 'correct'
-    chosen_answer = data[3]
+    # The index of the chosen option is at data[2], and is_correct flag is at data[3]
+    chosen_option_index = int(data[2])
+    is_correct_flag = data[3]
     
     state_data = await state.get_data()
     user_id = state_data['user_id']
     correct_russian_word = state_data['current_quiz_word_ru']
     english_word = state_data['current_quiz_word_en']
+    quiz_options = state_data['quiz_options'] # Get options from state
     current_date = datetime.datetime.now().isoformat()
+
+    chosen_answer = quiz_options[chosen_option_index] # Get the actual text of the chosen answer
+    is_correct = (chosen_answer == correct_russian_word)
 
     if is_correct:
         await callback.answer("Верно!", show_alert=False)
@@ -194,8 +221,8 @@ async def process_choose_translation_answer(callback: CallbackQuery, state: FSMC
     await callback.message.answer(
         "Хотите еще раз сыграть?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Да, еще раз!", callback_data="play_choose_translation_again"),
-             InlineKeyboardButton(text="Нет, завершить", callback_data="finish_game_show_stats")]
+            [InlineKeyboardButton(text="Нет, завершить", callback_data="finish_game_show_stats"),
+             InlineKeyboardButton(text="Да, еще раз!", callback_data="play_choose_translation_again")]
         ])
     )
 
@@ -210,8 +237,8 @@ async def play_choose_translation_again(callback: CallbackQuery, state: FSMConte
 # --- Build Word Quiz ---
 @router.message(F.text == "🧩 Собери слово", Games.in_games_menu)
 async def start_build_word_quiz(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    words = load_words()
+    user_id = message.from_user.id
+    words = word_manager.load_words(user_id)
     await state.set_state(Games.quiz_build_word)
     await state.update_data(user_id=user_id, all_words=words)
     await message.answer(
@@ -223,8 +250,8 @@ async def start_build_word_quiz(message: Message, state: FSMContext):
 
 @router.message(F.text == "🔍 Найди букву", Games.in_games_menu)
 async def start_find_missing_letter_quiz(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    words = load_words()
+    user_id = message.from_user.id
+    words = word_manager.load_words(user_id)
     await state.set_state(Games.quiz_find_missing_letter)
     await state.update_data(user_id=user_id, all_words=words)
     await message.answer(
@@ -260,7 +287,9 @@ async def send_find_missing_letter_question(message: Message, state: FSMContext)
 
     await state.update_data(current_missing_word_en=english_word, 
                              current_missing_word_ru=russian_translation, 
-                             correct_missing_letter=missing_letter)
+                             correct_missing_letter=missing_letter,
+                             quiz_options=options # Store options for later validation
+    )
 
     await message.answer(
         f"Какая буква пропущена в слове: *{displayed_word.lower()}*" 
@@ -297,15 +326,20 @@ async def send_build_word_question(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("quiz_answer_"), Games.quiz_find_missing_letter)
 async def process_find_missing_letter_answer(callback: CallbackQuery, state: FSMContext):
     data = callback.data.split('_')
-    is_correct = data[2] == 'correct'
-    chosen_answer = data[3]
+    # The index of the chosen option is at data[2], and is_correct flag is at data[3]
+    chosen_option_index = int(data[2])
+    is_correct_flag = data[3]
 
     state_data = await state.get_data()
     user_id = state_data['user_id']
     correct_english_word = state_data['current_missing_word_en']
     russian_translation = state_data['current_missing_word_ru']
     correct_missing_letter = state_data['correct_missing_letter']
+    quiz_options = state_data['quiz_options'] # Get options from state
     current_date = datetime.datetime.now().isoformat()
+
+    chosen_answer = quiz_options[chosen_option_index] # Get the actual text of the chosen answer
+    is_correct = (chosen_answer == correct_missing_letter)
 
     if is_correct:
         await callback.answer("Верно!", show_alert=False)
@@ -327,8 +361,8 @@ async def process_find_missing_letter_answer(callback: CallbackQuery, state: FSM
     await callback.message.answer(
         "Хотите еще раз сыграть?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Да, еще раз!", callback_data="play_find_missing_letter_again"),
-             InlineKeyboardButton(text="Нет, завершить", callback_data="finish_game_show_stats")]
+            [InlineKeyboardButton(text="Нет, завершить", callback_data="finish_game_show_stats"),
+             InlineKeyboardButton(text="Да, еще раз!", callback_data="play_find_missing_letter_again")]
         ])
     )
 
@@ -364,8 +398,8 @@ async def process_build_word_answer(message: Message, state: FSMContext):
     await message.answer(
         "Хотите сыграть еще раз?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Да, еще раз!", callback_data="play_build_word_again"),
-             InlineKeyboardButton(text="Нет, завершить", callback_data="finish_game_show_stats")]
+            [InlineKeyboardButton(text="Нет, завершить", callback_data="finish_game_show_stats"),
+             InlineKeyboardButton(text="Да, еще раз!", callback_data="play_build_word_again")]
         ])
     )
 
@@ -387,14 +421,15 @@ async def back_to_games_menu_callback(callback: CallbackQuery, state: FSMContext
     await callback.message.answer("Вы вернулись в меню игр.", reply_markup=games_menu_keyboard)
 
 @router.callback_query(F.data == "finish_game_show_stats")
-async def finish_game_and_show_stats(callback: CallbackQuery, state: FSMContext):
+async def finish_game_and_show_stats(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await callback.answer()
     state_data = await state.get_data()
     user_id = state_data['user_id']
-    await state.clear()
+    await cleanup_guess_audio(callback.message, state, bot) # Добавлено: Очищаем аудиофайлы игры "Угадай слово"
     await update_last_active(int(user_id))
-    stats_text = await get_formatted_statistics(user_id)
-    await callback.message.answer(stats_text, reply_markup=main_menu_keyboard, parse_mode="Markdown")
+    # Вместо get_formatted_statistics, вызываем show_statistics_handler для унификации
+    await callback.message.answer("Игра завершена. Вы можете посмотреть свою статистику в главном меню.", reply_markup=main_menu_keyboard)
+    await state.clear() # Очищаем состояние после отображения статистики
 
 @router.callback_query(F.data == "play_find_missing_letter_again", Games.quiz_find_missing_letter)
 async def play_find_missing_letter_again(callback: CallbackQuery, state: FSMContext):
@@ -421,7 +456,7 @@ async def start_recall_typing_countdown(callback: CallbackQuery, state: FSMConte
         reply_markup=None
     )
 
-    for i in range((RECALL_TYPING_COUNTDOWN_SECONDS + 3) - 1, 0, -1):
+    for i in range(int(RECALL_TYPING_COUNTDOWN_SECONDS + 2) - 1, 0, -1):
         await countdown_message.edit_text(f"Приготовьтесь! Игра начнется через {i} секунд...")
         await asyncio.sleep(1)
     
@@ -430,8 +465,8 @@ async def start_recall_typing_countdown(callback: CallbackQuery, state: FSMConte
 
 @router.message(F.text == "📝 Ввод по памяти", Games.in_games_menu)
 async def start_recall_typing_quiz(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    words = load_words()
+    user_id = message.from_user.id
+    words = word_manager.load_words(user_id)
     await state.set_state(Games.quiz_recall_typing)
     await state.update_data(user_id=user_id, all_words=words)
     await message.answer(
@@ -508,12 +543,21 @@ async def process_recall_typing_answer(message: Message, state: FSMContext):
     await message.answer(
         "Хотите еще раз сыграть?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Да, еще раз!", callback_data="play_recall_typing_again"),
-             InlineKeyboardButton(text="Нет, завершить", callback_data="finish_game_show_stats")]
+            [InlineKeyboardButton(text="Нет, завершить", callback_data="finish_game_show_stats"),
+             InlineKeyboardButton(text="Да, еще раз!", callback_data="play_recall_typing_again")]
         ])
     )
 
 @router.message(F.text == "⬆️ В главное меню", Games.in_games_menu)
 async def back_to_main_from_games(message: Message, state: FSMContext):
+    # Удаляем аудиофайлы из игры "Угадай слово" перед возвратом в главное меню
+    #await cleanup_guess_audio(message, state, message.bot)
+    await state.clear()
+    await message.answer("Вы вернулись в главное меню.", reply_markup=main_menu_keyboard)
+
+@router.message(F.text == "⬆️ В главное меню", Games.quiz_guess_word)
+async def back_to_main_from_guess_word_game_specific(message: Message, state: FSMContext, bot: Bot):
+    # Удаляем аудиофайлы из игры "Угадай слово" перед возвратом в главное меню
+    await cleanup_guess_audio(message, state, bot)
     await state.clear()
     await message.answer("Вы вернулись в главное меню.", reply_markup=main_menu_keyboard)

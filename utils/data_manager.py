@@ -2,6 +2,7 @@ import json
 import os
 import aiofiles
 from typing import Dict, Any
+import logging
 
 STATS_FILE = "data/stats.json"
 
@@ -10,7 +11,14 @@ async def load_stats() -> Dict[str, Any]:
         return {}
     async with aiofiles.open(STATS_FILE, 'r') as f:
         content = await f.read()
-        return json.loads(content)
+        if not content.strip(): # Check if content is empty or only whitespace
+            return {} # Return empty dict if file is empty
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            # Log the error if needed
+            print(f"Warning: {STATS_FILE} is corrupted or invalid. Initializing with empty stats.")
+            return {}
 
 async def save_stats(stats: Dict[str, Any]):
     os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
@@ -19,16 +27,16 @@ async def save_stats(stats: Dict[str, Any]):
 
 async def update_user_profile_data(user_id: str,
                                    registered_name: str,
-                                   first_name: str | None = None,
-                                   last_name: str | None = None,
-                                   username: str | None = None):
+                                   first_name: str = None,
+                                   last_name: str = None,
+                                   username: str = None):
     all_stats = await load_stats()
     user_stats = all_stats.get(user_id, {})
 
     user_stats['registered_name'] = registered_name
-    user_stats['first_name'] = first_name
-    user_stats['last_name'] = last_name
-    user_stats['username'] = username
+    user_stats['first_name'] = first_name or '' # Ensure it's an empty string, not None
+    user_stats['last_name'] = last_name or ''   # Ensure it's an empty string, not None
+    user_stats['username'] = username or ''     # Ensure it's an empty string, not None
     
     all_stats[user_id] = user_stats
     await save_stats(all_stats)
@@ -76,12 +84,13 @@ async def calculate_overall_score_and_rank() -> list[Dict[str, Any]]:
     
     return user_scores
 
-async def update_user_stats(user_id: str, total_correct_answers: int, best_test_score: int, last_activity_date: str):
+async def update_user_stats(user_id: str, total_correct_answers: int, best_test_score: int, last_activity_date: str, best_test_time: float):
     all_stats = await load_stats()
     user_stats = all_stats.get(user_id, {})
     user_stats['total_correct_answers'] = total_correct_answers
     user_stats['best_test_score'] = best_test_score
     user_stats['last_activity_date'] = last_activity_date
+    user_stats['best_test_time'] = best_test_time # Сохраняем лучшее время теста
     all_stats[user_id] = user_stats
     await save_stats(all_stats)
 
@@ -130,7 +139,7 @@ async def update_game_stats(user_id: str, game_type: str, is_correct: bool, last
 IMAGE_DIR = "data/images"
 SOUNDS_DIR = "data/sounds"
 
-async def get_image_filepath(word: str) -> str | None:
+async def get_image_filepath(word: str):
     # Supported image extensions (add more if needed)
     for ext in ['.png', '.jpg', '.jpeg', '.gif']:
         filepath = os.path.join(IMAGE_DIR, f"{word.lower()}{ext}")
@@ -138,7 +147,7 @@ async def get_image_filepath(word: str) -> str | None:
             return filepath
     return None
 
-async def get_audio_filepath(word: str) -> str | None:
+async def get_audio_filepath(word: str):
     # Supported audio extensions (add more if needed)
     for ext in ['.mp3', '.ogg', '.wav']:
         filepath = os.path.join(SOUNDS_DIR, f"{word.lower()}{ext}")
