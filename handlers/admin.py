@@ -9,6 +9,8 @@ import datetime
 from utils.audio_converter import convert_ogg_to_mp3 # Импорт для админской команды конвертации
 from database import delete_user_from_db, get_all_users # Импорт get_all_users
 import html # Import the html module for escaping
+import re # Add this import
+
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram import Bot # Импорт Bot для загрузки файлов
@@ -163,29 +165,18 @@ async def show_all_user_stats(message: Message):
                 pass # Keep as 'N/A' or original string if parsing fails
 
         # Determine display name for the user, prioritizing Telegram full name, then username, then bot-registered name, then "No name"
-        display_name_for_link = "No name"
-        escaped_first_name = html.escape(user_entry.get('first_name', '') or '') # Ensure it's string before escaping
-        escaped_last_name = html.escape(user_entry.get('last_name', '') or '')   # Ensure it's string before escaping
-        escaped_username = html.escape(user_entry.get('username', '') or '')
-        escaped_registered_name = html.escape(user_entry.get('name', '') or '') # Bot-registered name
-
-        full_name_parts = []
-        if escaped_first_name: full_name_parts.append(escaped_first_name)
-        if escaped_last_name: full_name_parts.append(escaped_last_name)
-        full_name = " ".join(full_name_parts).strip()
-
-        if full_name:
-            display_name_for_link = full_name
-        elif escaped_username:
-            display_name_for_link = escaped_username
-        elif escaped_registered_name:
-            display_name_for_link = escaped_registered_name
+        # Use the helper function to get the display name
+        display_name_for_link = _get_display_name(
+            user_entry.get('first_name'),
+            user_entry.get('last_name'),
+            user_entry.get('username'),
+            user_entry.get('registered_name') # Correctly use registered_name
+        )
+        escaped_username_for_display = html.escape(str(user_entry.get('username', '') or ''))
+        username_display_text = f" (@{escaped_username_for_display})" if escaped_username_for_display else " (No username)"
         
         # Create a user profile link (HTML format)
         user_link = f"<a href=\"tg://user?id={user_id}\">{display_name_for_link}</a>"
-        
-        # Display username if available, otherwise "No username"
-        username_display_text = f" (@{escaped_username})" if escaped_username else " (No username)"
         
         stats_text += f"<b>Ранг: {rank}</b> - {user_link}{username_display_text} (Балл: <b>{overall_score:.2f}</b>)\n"
         stats_text += f"  - ОКПО: <b>{total_correct_answers}</b> | Тест: <b>{best_test_score}</b> | ПА: <b>{formatted_last_activity}</b>\n"
@@ -392,43 +383,29 @@ async def list_all_users(message: Message):
 """
     for user in users:
         user_id = user['user_id']
-        name = user['name']
+        name = user['name'] # This is 'registered_name' from update_user_profile_data
         first_name = user.get('first_name', '')
         last_name = user.get('last_name', '')
         username = user.get('username', '')
 
-        # Ensure values are strings before escaping
-        # These are now guaranteed to be strings from update_user_profile_data, but good for safety
-        first_name = first_name or ''
-        last_name = last_name or ''
-        username = username or ''
-
-        # Escape HTML special characters for safe display
-        escaped_first_name = html.escape(first_name)
-        escaped_last_name = html.escape(last_name)
-        escaped_username = html.escape(username)
-
-        full_name_parts = []
-        if escaped_first_name: full_name_parts.append(escaped_first_name)
-        if escaped_last_name: full_name_parts.append(escaped_last_name)
-        full_name = " ".join(full_name_parts).strip()
-
-        # Determine display name for the link, prioritizing Telegram full name, then username, then bot-registered name, then "No name"
-        display_name_for_link = "No name"
-        if full_name:
-            display_name_for_link = full_name
-        elif escaped_username:
-            display_name_for_link = escaped_username
-        elif html.escape(name): # Fallback to bot-registered name if available
-            display_name_for_link = html.escape(name)
+        # Use the helper function to get the display name for the link
+        display_name_for_link = _get_display_name(
+            first_name,
+            last_name,
+            username,
+            name # 'name' here is the registered_name
+        )
+        
+        # Escape HTML special characters for safe display of username
+        escaped_username_for_display = html.escape(str(username or ''))
         
         # Create a clickable link to the user's profile
         user_link = f"<a href=\"tg://user?id={user_id}\">{display_name_for_link}</a>"
 
-        username_display = f" (@{escaped_username})" if escaped_username else " (No username)"
+        username_display = f" (@{escaped_username_for_display})" if escaped_username_for_display else " (No username)"
 
         users_text += (
-            f"ID: `{user_id}` | Имя в боте: `{html.escape(name) or 'No name'}`\n" # Bot-registered name
+            f"ID: `{user_id}` | Имя в боте: `{html.escape(str(name or 'No name'))}`\n" # Bot-registered name
             f"Профиль TG: {user_link}{username_display}\n\n" # Telegram profile details
         )
     
@@ -551,3 +528,49 @@ async def cancel_audio_filename_entry(callback: CallbackQuery, state: FSMContext
     await callback.message.edit_text("Ввод имени файла отменен.", reply_markup=None)
     await state.clear()
     await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+
+# Helper functions for name formatting
+def _is_garbage_name(name: str) -> bool:
+    if not name or not name.strip():
+        return True
+    
+    letter_digit_count = len(re.findall(r'[^\W_]', name, flags=re.UNICODE))
+    
+    # If the name is very short (e.g., 1-2 chars) and has no letters/digits, consider it garbage.
+    if len(name.strip()) <= 2 and letter_digit_count == 0:
+        return True
+
+    # If the proportion of non-alphanumeric, non-space, non-Cyrillic characters is high.
+    # (e.g., more than 50% are "weird" characters)
+    # This pattern matches any character that is *not* a standard letter, number, space, or common punctuation.
+    # If a high percentage of the name consists of such 'bad' characters, it's probably garbage.
+    # This regex is standard 're' compatible.
+    bad_chars_pattern = r'[^a-zA-Z0-9\s.,! ?\'"-\[\]{}()<>/\\+=*&^%$#@`~]'
+    num_bad_chars = len(re.findall(bad_chars_pattern, name, flags=re.UNICODE))
+    
+    if len(name) > 0 and num_bad_chars / len(name) > 0.5: # If more than 50% are "bad" characters
+        return True
+
+    return False
+
+def _get_display_name(first_name: str | None, last_name: str | None, username: str | None, registered_name: str | None) -> str:
+    # Ensure all inputs are strings or empty strings for processing
+    first_name_str = str(first_name or '')
+    last_name_str = str(last_name or '')
+    username_str = str(username or '')
+    registered_name_str = str(registered_name or '')
+
+    full_name_parts = []
+    if first_name_str and not _is_garbage_name(first_name_str):
+        full_name_parts.append(html.escape(first_name_str))
+    if last_name_str and not _is_garbage_name(last_name_str):
+        full_name_parts.append(html.escape(last_name_str))
+    full_name = " ".join(full_name_parts).strip()
+
+    if full_name:
+        return full_name
+    elif username_str and not _is_garbage_name(username_str):
+        return html.escape(username_str)
+    elif registered_name_str and not _is_garbage_name(registered_name_str):
+        return html.escape(registered_name_str)
+    return "No name"

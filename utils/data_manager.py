@@ -30,6 +30,7 @@ async def update_user_profile_data(user_id: str,
                                    first_name: str = None,
                                    last_name: str = None,
                                    username: str = None):
+    user_id = str(user_id) # Ensure user_id is string
     all_stats = await load_stats()
     user_stats = all_stats.get(user_id, {})
 
@@ -85,6 +86,7 @@ async def calculate_overall_score_and_rank() -> list[Dict[str, Any]]:
     return user_scores
 
 async def update_user_stats(user_id: str, total_correct_answers: int, best_test_score: int, last_activity_date: str, best_test_time: float):
+    user_id = str(user_id) # Ensure user_id is string
     all_stats = await load_stats()
     user_stats = all_stats.get(user_id, {})
     user_stats['total_correct_answers'] = total_correct_answers
@@ -103,6 +105,7 @@ async def delete_user_stats_entry(user_id: str) -> bool:
     return False
 
 async def update_game_stats(user_id: str, game_type: str, is_correct: bool, last_activity_date: str, time_taken: float = None):
+    user_id = str(user_id) # Ensure user_id is string
     all_stats = await load_stats()
     user_stats = all_stats.get(user_id, {})
 
