@@ -5,11 +5,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 
-from config import TOKEN, ADMIN_ID
+from config import TOKEN, ADMIN_IDS
 from database import init_db
 from keyboards import main_menu_keyboard
 from utils.audio_converter import convert_ogg_to_mp3
 from utils.audio_cleanup import cleanup_guess_audio
+from utils.data_manager import get_banned_users
 
 from handlers import start, learn, games, test, stats, help, admin
 from handlers import user_words # Новый импорт для пользовательских команд
@@ -31,6 +32,14 @@ async def main():
     dp.include_router(help.router)
     dp.include_router(admin.router)
     dp.include_router(user_words.router) # Регистрируем роутер для пользовательских слов
+
+    @dp.message.outer_middleware()
+    async def anti_ban_outer_middleware(handler, event, data):
+        user_id = event.from_user.id
+        if user_id in await get_banned_users():
+            await event.answer("Вы заблокированы и не можете использовать этого бота.")
+            return # Stop propagation for banned users
+        return await handler(event, data) # Continue processing for non-banned users
 
     @dp.message(F.text == "⬆️ В главное меню", F.fsm_state == None)
     async def already_in_main_menu(message: Message):

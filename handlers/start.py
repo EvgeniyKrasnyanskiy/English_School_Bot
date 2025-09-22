@@ -7,7 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from database import add_user, get_user, update_last_active
 from keyboards import main_menu_keyboard
 from utils.data_manager import update_user_profile_data
-from config import ADMIN_ID
+from config import ADMIN_IDS
 from aiogram import Bot
 
 router = Router()
@@ -62,18 +62,19 @@ async def process_name(message: Message, state: FSMContext, bot: Bot):
         )
         # Notify admin about a new user
         try:
-            if bot and ADMIN_ID:
+            if bot and ADMIN_IDS:
                 full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
                 username = f"@{message.from_user.username}" if message.from_user.username else "(no username)"
-                await bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=(
-                        "🆕 Новый пользователь\n"
-                        f"ID: {user_id}\n"
-                        f"Имя в боте: {user_name}\n"
-                        f"Профиль TG: {full_name} {username}"
+                for admin_id in ADMIN_IDS:
+                    await bot.send_message(
+                        chat_id=admin_id,
+                        text=(
+                            "🆕 Новый пользователь\n"
+                            f"ID: {user_id}\n"
+                            f"Имя в боте: {user_name}\n"
+                            f"Профиль TG: {full_name} {username}"
+                        )
                     )
-                )
         except Exception:
             pass
         await message.answer(

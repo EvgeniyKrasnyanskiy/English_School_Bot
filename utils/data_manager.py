@@ -4,26 +4,34 @@ import aiofiles
 from typing import Dict, Any
 import logging
 
+logger = logging.getLogger(__name__)
+
 STATS_FILE = "data/stats.json"
 
 async def load_stats() -> Dict[str, Any]:
+    logger.debug(f"[load_stats] Attempting to load stats from {STATS_FILE}")
     if not os.path.exists(STATS_FILE):
+        logger.info(f"[load_stats] {STATS_FILE} not found. Returning empty dict.")
         return {}
     async with aiofiles.open(STATS_FILE, 'r') as f:
         content = await f.read()
         if not content.strip(): # Check if content is empty or only whitespace
+            logger.warning(f"[load_stats] {STATS_FILE} is empty or contains only whitespace. Returning empty dict.")
             return {} # Return empty dict if file is empty
         try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            # Log the error if needed
-            print(f"Warning: {STATS_FILE} is corrupted or invalid. Initializing with empty stats.")
+            loaded_stats = json.loads(content)
+            logger.debug(f"[load_stats] Successfully loaded stats: {loaded_stats}")
+            return loaded_stats
+        except json.JSONDecodeError as e:
+            logger.error(f"[load_stats] Error decoding JSON from {STATS_FILE}: {e}. Content: {content[:200]}...")
             return {}
 
 async def save_stats(stats: Dict[str, Any]):
+    logger.debug(f"[save_stats] Attempting to save stats to {STATS_FILE}. Data: {stats}")
     os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
     async with aiofiles.open(STATS_FILE, 'w') as f:
         await f.write(json.dumps(stats, indent=4))
+    logger.debug(f"[save_stats] Successfully saved stats to {STATS_FILE}")
 
 async def update_user_profile_data(user_id: str,
                                    registered_name: str,
@@ -47,6 +55,10 @@ async def calculate_overall_score_and_rank() -> list[Dict[str, Any]]:
     user_scores = []
 
     for user_id, stats in all_stats.items():
+        if not isinstance(stats, dict):
+            logging.warning(f"[calculate_overall_score_and_rank] Skipping invalid stats entry for user {user_id}: Expected dict, got {type(stats)}")
+            continue
+
         total_correct_answers = stats.get('total_correct_answers', 0)
         best_test_score = stats.get('best_test_score', 0)
         
@@ -138,6 +150,32 @@ async def update_game_stats(user_id: str, game_type: str, is_correct: bool, last
     user_stats['last_activity_date'] = last_activity_date
     all_stats[user_id] = user_stats
     await save_stats(all_stats)
+
+async def get_banned_users() -> list[int]:
+    all_stats = await load_stats()
+    return [int(user_id) for user_id in all_stats.get('banned_users', [])]
+
+async def add_banned_user(user_id: int) -> bool:
+    all_stats = await load_stats()
+    banned_users = all_stats.get('banned_users', [])
+    user_id_str = str(user_id)
+    if user_id_str not in banned_users:
+        banned_users.append(user_id_str)
+        all_stats['banned_users'] = banned_users
+        await save_stats(all_stats)
+        return True
+    return False
+
+async def remove_banned_user(user_id: int) -> bool:
+    all_stats = await load_stats()
+    banned_users = all_stats.get('banned_users', [])
+    user_id_str = str(user_id)
+    if user_id_str in banned_users:
+        banned_users.remove(user_id_str)
+        all_stats['banned_users'] = banned_users
+        await save_stats(all_stats)
+        return True
+    return False
 
 IMAGE_DIR = "data/images"
 SOUNDS_DIR = "data/sounds"

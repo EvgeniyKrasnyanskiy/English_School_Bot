@@ -1,7 +1,7 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
-from config import ADMIN_ID
+from config import ADMIN_IDS
 from utils.utils import add_word, get_words_alphabetical, delete_word
 from utils.data_manager import calculate_overall_score_and_rank, delete_user_stats_entry
 from utils.word_manager import word_manager
@@ -10,26 +10,42 @@ from utils.audio_converter import convert_ogg_to_mp3 # Импорт для ад�
 from database import delete_user_from_db, get_all_users # Импорт get_all_users
 import html # Import the html module for escaping
 import re # Add this import
+import json # Add this import for json.loads
+import logging # Add this import for logging
+import asyncio # Add this import for asyncio.sleep
 
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram import Bot # Импорт Bot для загрузки файлов
 import os # Импорт os для работы с файловой системой
 import uuid # Импорт uuid для генерации уникальных имен файлов
-from keyboards import cancel_keyboard_for_filename # Импорт клавиатуры для отмены
+from keyboards import cancel_keyboard_for_filename, confirm_broadcast_keyboard # Импорт клавиатуры для отмены
 from keyboards import main_menu_keyboard # Импорт клавиатуры для отмены
+from keyboards import cancel_keyboard
 
 
 class AdminStates(StatesGroup):
     waiting_for_voice = State()
     waiting_for_audio_filename = State()
-
+    waiting_for_settings_selection = State() # New state for settings menu
+    waiting_for_setting_value = State() # New state for setting new value
+    waiting_for_ban_user_id = State()
+    waiting_for_unban_user_id = State()
+    waiting_for_broadcast_text = State()
 
 router = Router()
 
+# Dictionary to hold configurable settings and their types
+CONFIGURABLE_SETTINGS = {
+    "TEST_QUESTIONS_COUNT": {"type": int, "description": "Количество вопросов в тесте"},
+    "ADMIN_IDS": {"type": list, "description": "Список ID администраторов"},
+    "RECALL_TYPING_COUNTDOWN_SECONDS": {"type": float, "description": "Время на ввод в игре 'Ввод по памяти'"},
+    "MAX_USER_WORDS": {"type": int, "description": "Максимальное количество слов в пользовательском наборе"},
+}
+
 @router.message(Command("add"))
 async def add_new_word(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
@@ -70,7 +86,7 @@ async def add_new_word(message: Message):
 
 @router.message(Command("admin_list"))
 async def list_words(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
@@ -99,7 +115,7 @@ async def list_words(message: Message):
 
 @router.message(Command("del"))
 async def del_word(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
@@ -133,9 +149,20 @@ async def del_word(message: Message):
 
 @router.message(Command("stats"))
 async def show_all_user_stats(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
+
+    args = message.text.split(maxsplit=1)
+    target_class = None
+
+    if len(args) > 1:
+        class_match = re.match(r"class=([\wА-Яа-яЁё\d]+)", args[1].strip(), re.IGNORECASE)
+        if class_match:
+            target_class = class_match.group(1).upper()
+        else:
+            await message.reply("Неверный формат команды. Используйте: `/stats` или `/stats class=2в`", parse_mode="Markdown")
+            return
 
     ranked_users = await calculate_overall_score_and_rank()
 
@@ -143,8 +170,24 @@ async def show_all_user_stats(message: Message):
         await message.reply("Статистика по пользователям пока отсутствует.")
         return
 
-    stats_text = "<b>Общая статистика пользователей (по рейтингу):</b>\n\n"
+    filtered_users = []
     for user_entry in ranked_users:
+        if target_class:
+            # Check if user's registered_name contains the class name (e.g., "Иван 2В")
+            if user_entry.get('registered_name') and f" {target_class}" in user_entry['registered_name'].upper():
+                filtered_users.append(user_entry)
+        else:
+            filtered_users.append(user_entry)
+
+    if not filtered_users and target_class:
+        await message.reply(f"Статистика для класса `{target_class}` не найдена.", parse_mode="Markdown")
+        return
+
+    stats_text = "<b>Общая статистика пользователей (по рейтингу):</b>\n\n"
+    if target_class:
+        stats_text = f"<b>Статистика пользователей класса {target_class} (по рейтингу):</b>\n\n"
+
+    for user_entry in filtered_users:
         user_id = user_entry['user_id']
         rank = user_entry['rank']
         overall_score = user_entry['overall_score']
@@ -188,7 +231,7 @@ async def show_all_user_stats(message: Message):
 
 @router.message(Command("deluser"))
 async def del_user(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
@@ -218,7 +261,7 @@ async def del_user(message: Message):
 @router.message(Command("files"))
 async def list_word_files(message: Message):
     """Показывает список доступных файлов со словами."""
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
@@ -242,7 +285,7 @@ async def list_word_files(message: Message):
 @router.message(Command("switch"))
 async def switch_word_file(message: Message):
     """Переключает активный файл со словами."""
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
@@ -266,7 +309,7 @@ async def switch_word_file(message: Message):
 @router.message(Command("create_file"))
 async def create_word_file(message: Message):
     """Создает новый файл со словами."""
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
@@ -284,7 +327,7 @@ async def create_word_file(message: Message):
 @router.message(Command("delete_file"))
 async def delete_word_file(message: Message):
     """Удаляет файл со словами."""
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
@@ -305,7 +348,7 @@ async def delete_word_file(message: Message):
 
 @router.message(Command("deduplicate_words"))
 async def deduplicate_words_command(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
     
@@ -331,7 +374,7 @@ async def deduplicate_words_command(message: Message):
 @router.message(Command("current_file"))
 async def show_current_file(message: Message):
     """Показывает информацию о текущем активном файле."""
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
@@ -350,7 +393,7 @@ async def show_current_file(message: Message):
 
 @router.message(Command("convert_audio"))
 async def convert_audio_command(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
@@ -368,7 +411,7 @@ async def convert_audio_command(message: Message):
 
 @router.message(Command("users"))
 async def list_all_users(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
     
@@ -411,18 +454,140 @@ async def list_all_users(message: Message):
     
     await message.reply(users_text, parse_mode="HTML") # Use HTML parse mode for links
 
-@router.message(Command("new_sound"))
-async def add_new_audio_command(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+@router.message(Command("ban"))
+async def ban_user_command(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
-    await message.reply("Пожалуйста, отправьте голосовое сообщение (аудиофайл), которое вы хотите добавить.")
+    await message.reply("Пожалуйста, отправьте ID пользователя, которого вы хотите забанить.", reply_markup=cancel_keyboard)
+    await state.set_state(AdminStates.waiting_for_ban_user_id)
+
+@router.message(AdminStates.waiting_for_ban_user_id, F.text)
+async def process_ban_user_id(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+
+    try:
+        user_id_to_ban = int(message.text.strip())
+    except ValueError:
+        await message.reply("Неверный формат ID пользователя. ID должен быть числом.", reply_markup=cancel_keyboard)
+        return
+
+    from utils.data_manager import add_banned_user # Import here to avoid circular dependency
+
+    if await add_banned_user(user_id_to_ban):
+        await message.reply(f"✅ Пользователь с ID {user_id_to_ban} успешно забанен.")
+    else:
+        await message.reply(f"❌ Пользователь с ID {user_id_to_ban} уже находится в черном списке.")
+    
+    await state.clear()
+    await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+
+@router.message(Command("send"))
+async def send_message_command(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        return
+
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.reply("Пожалуйста, используйте формат: `/send [текст]` или `/send class=2в [текст]`", parse_mode="Markdown")
+        return
+
+    target_class = None
+    message_text_raw = args[1].strip()
+
+    class_match = re.match(r"class=([\wА-Яа-яЁё\d]+)\s*(.*)", message_text_raw, re.IGNORECASE)
+    if class_match:
+        target_class = class_match.group(1).upper() # Store class in uppercase for consistent matching
+        message_text = class_match.group(2).strip()
+    else:
+        message_text = message_text_raw
+
+    if not message_text:
+        await message.reply("Текст рассылки не может быть пустым.", reply_markup=cancel_keyboard)
+        return
+
+    # Store the target_class and message_text in FSM context
+    await state.update_data(broadcast_target_class=target_class, broadcast_message_text=message_text)
+    await state.set_state(AdminStates.waiting_for_broadcast_text)
+
+    confirmation_message = f"Вы собираетесь отправить следующее сообщение: `{message_text}`\n\n"
+    if target_class:
+        confirmation_message += f"Будет отправлено пользователям класса: `{target_class}`. Вы уверены?"
+    else:
+        confirmation_message += "Будет отправлено ВСЕМ пользователям. Вы уверены?"
+    
+    await message.reply(confirmation_message, parse_mode="Markdown", reply_markup=confirm_broadcast_keyboard)
+
+
+@router.message(AdminStates.waiting_for_broadcast_text, F.text == "Да, отправить")
+async def confirm_send_message(message: Message, state: FSMContext, bot: Bot):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+
+    state_data = await state.get_data()
+    target_class = state_data.get("broadcast_target_class")
+    message_text = state_data.get("broadcast_message_text")
+
+    if not message_text:
+        await message.reply("Ошибка: текст сообщения для рассылки не найден.", reply_markup=main_menu_keyboard)
+        await state.clear()
+        return
+
+    from database import get_all_users
+    all_users = await get_all_users()
+    target_users = []
+
+    for user in all_users:
+        if target_class:
+            # Check if user's registered_name contains the class name (e.g., "Иван 2В")
+            if user.get('name') and f" {target_class}" in user['name'].upper():
+                target_users.append(user)
+        else:
+            target_users.append(user)
+    
+    sent_count = 0
+    failed_count = 0
+    for user in target_users:
+        try:
+            await bot.send_message(user['user_id'], message_text)
+            sent_count += 1
+            await asyncio.sleep(0.05) # Small delay to avoid hitting Telegram API limits
+        except Exception as e:
+            logging.error(f"Не удалось отправить сообщение пользователю {user['user_id']}: {e}")
+            failed_count += 1
+    
+    await message.reply(f"✅ Рассылка завершена! Отправлено: {sent_count}, Не удалось отправить: {failed_count}", reply_markup=main_menu_keyboard)
+    await state.clear()
+
+@router.message(AdminStates.waiting_for_broadcast_text, F.text == "Отмена")
+async def cancel_send_message(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+    await state.clear()
+    await message.reply("Рассылка отменена.", reply_markup=main_menu_keyboard)
+
+
+@router.message(Command("new_sound"))
+async def add_new_audio_command(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        return
+
+    await message.reply("Пожалуйста, отправьте голосовое сообщение (аудиофайл), которое вы хотите добавить.", reply_markup=cancel_keyboard)
     await state.set_state(AdminStates.waiting_for_voice)
 
 @router.message(AdminStates.waiting_for_voice, F.voice)
 async def process_voice_for_new_audio(message: Message, state: FSMContext, bot: Bot):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         await state.clear()
         return
@@ -441,12 +606,12 @@ async def process_voice_for_new_audio(message: Message, state: FSMContext, bot: 
     await bot.download_file(file.file_path, temp_ogg_filepath)
 
     await state.update_data(temp_ogg_filepath=temp_ogg_filepath)
-    await message.reply("Голосовое сообщение получено. Как вы хотите назвать этот аудиофайл (без расширения)?")
+    await message.reply("Голосовое сообщение получено. Как вы хотите назвать этот аудиофайл (без расширения)?", reply_markup=cancel_keyboard_for_filename)
     await state.set_state(AdminStates.waiting_for_audio_filename)
 
 @router.message(AdminStates.waiting_for_audio_filename, F.text)
 async def process_audio_filename(message: Message, state: FSMContext, bot: Bot):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         await state.clear()
         return
@@ -499,35 +664,288 @@ async def process_audio_filename(message: Message, state: FSMContext, bot: Bot):
 
     except Exception as e:
         await message.reply(f"Произошла ошибка при сохранении или конвертации файла: {e}")
-    finally:
-        # Удаляем временную папку
-        temp_audio_dir = os.path.join("data", "temp_audio")
-        if os.path.exists(temp_audio_dir):
-            for item in os.listdir(temp_audio_dir):
-                os.remove(os.path.join(temp_audio_dir, item))
-            os.rmdir(temp_audio_dir)
         await state.clear()
 
 
 @router.message(AdminStates.waiting_for_audio_filename, ~F.text)
 async def process_invalid_audio_filename(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         await state.clear()
         return
-    await message.reply("Пожалуйста, введите корректное имя файла (текст). Если вы хотите отменить, введите /cancel.")
+    await message.reply("Пожалуйста, введите корректное имя файла (текст). Если вы хотите отменить, введите /cancel.", reply_markup=cancel_keyboard)
 
-@router.callback_query(F.data == "cancel_audio_filename_entry")
-async def cancel_audio_filename_entry(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
+@router.callback_query(F.data == "cancel_audio_upload")
+async def cancel_audio_upload_handler(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("У вас нет прав для выполнения этой команды.", show_alert=True)
         await state.clear()
         return
 
-    await callback.answer("Ввод имени файла отменен.", show_alert=True)
-    await callback.message.edit_text("Ввод имени файла отменен.", reply_markup=None)
+    state_data = await state.get_data()
+    temp_ogg_filepath = state_data.get("temp_ogg_filepath")
+    if temp_ogg_filepath and os.path.exists(temp_ogg_filepath):
+        os.remove(temp_ogg_filepath)
+    
+    temp_audio_dir = os.path.join("data", "temp_audio")
+    if os.path.exists(temp_audio_dir):
+        for item in os.listdir(temp_audio_dir):
+            os.remove(os.path.join(temp_audio_dir, item))
+        os.rmdir(temp_audio_dir)
+    
     await state.clear()
+    await callback.answer("Операция отменена.", show_alert=True)
+    await callback.message.edit_text("Операция отменена.", reply_markup=None)
     await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+
+@router.message(Command("settings"))
+async def show_settings(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        return
+
+    settings_output = "⚙️ Текущие настройки бота:\n\n"
+    current_settings = {}
+    
+    # Read config.py content
+    with open("config.py", "r", encoding="utf-8") as f:
+        config_lines = f.readlines()
+
+    for line in config_lines:
+        for setting_name, setting_info in CONFIGURABLE_SETTINGS.items():
+            if line.strip().startswith(f"{setting_name} ="):
+                try:
+                    # Extract value dynamically
+                    value_str = line.split("=", 1)[1].strip()
+                    # Remove comments if any
+                    if "#" in value_str:
+                        value_str = value_str.split("#", 1)[0].strip()
+                    
+                    # Convert to appropriate type
+                    setting_type = setting_info["type"]
+                    value = None
+                    if setting_type is int:
+                        value = int(value_str)
+                    elif setting_type is float:
+                        value = float(value_str)
+                    elif setting_type is str:
+                        # Remove quotes for string values
+                        value = value_str.strip('"')
+                    elif setting_type is list:
+                        try:
+                            value = json.loads(value_str.replace("'", '"')) # Handle single quotes in list strings
+                        except json.JSONDecodeError:
+                            value = [item.strip() for item in value_str.strip('[]').split(',')] # Fallback for simple comma-separated lists
+                    
+                    current_settings[setting_name] = value
+                    # Format each setting individually using HTML
+                    settings_output += f"<code>{setting_name}</code>: <code>{html.escape(str(value))}</code> ({setting_info['description']})\n\n"
+
+                except (ValueError, json.JSONDecodeError) as e:
+                    logging.error(f"Ошибка при парсинге настройки {setting_name} из config.py: {e}")
+                    settings_output += f"<code>{setting_name}</code>: <code>Ошибка парсинга</code> ({setting_info['description']})\n\n"
+
+    settings_output += "Для изменения настройки, отправьте ее название или нажмите 'Отмена':"
+    
+    # Store current settings in state for later modification
+    await state.update_data(current_configurable_settings=current_settings)
+    await state.set_state(AdminStates.waiting_for_settings_selection)
+    
+    await message.reply(settings_output, parse_mode="HTML", reply_markup=cancel_keyboard)
+
+@router.message(AdminStates.waiting_for_settings_selection, F.text)
+async def process_settings_selection(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+
+    selected_setting = message.text.strip().upper()
+    
+    if selected_setting not in CONFIGURABLE_SETTINGS:
+        await message.reply("Неизвестная настройка. Пожалуйста, выберите настройку из списка или нажмите Отмена.", reply_markup=cancel_keyboard)
+        return
+
+    state_data = await state.get_data()
+    current_settings = state_data.get("current_configurable_settings", {})
+    
+    await state.update_data(selected_setting_to_modify=selected_setting)
+    await state.set_state(AdminStates.waiting_for_setting_value)
+
+    setting_info = CONFIGURABLE_SETTINGS[selected_setting]
+    current_value = current_settings.get(selected_setting, "N/A")
+    
+    await message.reply(
+        f"Вы выбрали настройку *{selected_setting}* ({setting_info['description']}). "
+        f"Текущее значение: `{current_value}`. "
+        f"Пожалуйста, введите новое значение:",
+        parse_mode="Markdown",
+        reply_markup=cancel_keyboard
+    )
+
+@router.message(AdminStates.waiting_for_setting_value, F.text)
+async def process_new_setting_value(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+    
+    new_value_str = message.text.strip()
+    state_data = await state.get_data()
+    selected_setting = state_data.get("selected_setting_to_modify")
+
+    if not selected_setting:
+        await message.reply("Произошла ошибка при определении настройки. Пожалуйста, начните с /settings снова.", reply_markup=main_menu_keyboard)
+        await state.clear()
+        return
+
+    setting_info = CONFIGURABLE_SETTINGS[selected_setting]
+    expected_type = setting_info["type"]
+
+    try:
+        if expected_type == int:
+            new_value = int(new_value_str)
+        elif expected_type == float:
+            new_value = float(new_value_str)
+        elif expected_type == list: # Handle list type
+            # This is a bit complex, as list values might be comma-separated strings
+            # or quoted strings. We'll try to parse them.
+            if new_value_str.startswith('"') and new_value_str.endswith('"'):
+                new_value = [item.strip() for item in new_value_str[1:-1].split(',')]
+            elif new_value_str.startswith('[') and new_value_str.endswith(']'):
+                new_value = [item.strip() for item in new_value_str[1:-1].split(',')]
+            else:
+                new_value = [item.strip() for item in new_value_str.split(',')]
+        else:
+            new_value = new_value_str.strip('""') # Treat as string
+        
+        # Now, update the config.py file
+        await update_config_file(selected_setting, new_value)
+
+        await message.reply(
+            f"✅ Настройка *{selected_setting}* успешно обновлена до `{new_value}`. Изменения применены.",
+            parse_mode="Markdown",
+            reply_markup=main_menu_keyboard
+        )
+        await state.clear()
+
+    except ValueError:
+        await message.reply(
+            f"❌ Неверный формат значения для *{selected_setting}*. Ожидается тип `{expected_type.__name__}`. "
+            f"Пожалуйста, введите корректное значение или нажмите Отмена.",
+            parse_mode="Markdown",
+            reply_markup=cancel_keyboard
+        )
+    except Exception as e:
+        await message.reply(
+            f"❌ Произошла ошибка при сохранении настройки *{selected_setting}*: {e}. "
+            f"Пожалуйста, попробуйте снова или нажмите Отмена.",
+            parse_mode="Markdown",
+            reply_markup=cancel_keyboard
+        )
+        
+# Helper function to update config.py
+async def update_config_file(setting_name: str, new_value: any):
+    filepath = "config.py"
+    with open(filepath, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    new_file_content_lines = []
+    updated = False
+    for line in lines:
+        stripped_line = line.strip()
+        if not stripped_line: # Skip empty lines during rebuild
+            continue
+        
+        if stripped_line.startswith(f"{setting_name} ="):
+            comment = ""
+            if "#" in stripped_line:
+                line_parts = stripped_line.split("#", 1)
+                comment = " # " + line_parts[1].strip()
+            
+            value_to_write = ""
+            if isinstance(new_value, str):
+                value_to_write = f"\"{new_value}\""
+            elif isinstance(new_value, list):
+                value_to_write = json.dumps(new_value, ensure_ascii=False)
+            else:
+                value_to_write = str(new_value)
+            
+            new_file_content_lines.append(f"{setting_name} = {value_to_write}{comment}\n")
+            updated = True
+        else: # Add non-empty, non-updated lines, ensuring single newline
+            new_file_content_lines.append(stripped_line + '\n')
+    
+    if not updated: # Should not happen for predefined settings, but as a fallback for new settings
+        value_to_write = ""
+        if isinstance(new_value, str):
+            value_to_write = f"\"{new_value}\""
+        elif isinstance(new_value, list):
+            value_to_write = json.dumps(new_value, ensure_ascii=False)
+        else:
+            value_to_write = str(new_value)
+        new_file_content_lines.append(f"{setting_name} = {value_to_write}\n")
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.writelines(new_file_content_lines)
+
+
+# Handler for invalid text input during settings selection
+@router.message(AdminStates.waiting_for_settings_selection, ~F.text)
+async def process_invalid_settings_selection(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        return
+    await message.reply("Пожалуйста, введите название настройки из списка или нажмите Отмена.")
+
+# Universal cancel handler for admin states
+@router.callback_query(F.data == "cancel_audio_upload", AdminStates.waiting_for_settings_selection)
+@router.callback_query(F.data == "cancel_audio_upload", AdminStates.waiting_for_setting_value)
+async def cancel_settings_operation(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("У вас нет прав для выполнения этой команды.", show_alert=True)
+        await state.clear()
+        return
+    
+    await state.clear()
+    await callback.answer("Операция отменена.", show_alert=True)
+    await callback.message.edit_text("Операция отменена.", reply_markup=None)
+    await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+
+@router.message(Command("unban"))
+async def unban_user_command(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        return
+
+    await message.reply("Пожалуйста, отправьте ID пользователя, которого вы хотите разбанить.", reply_markup=cancel_keyboard)
+    await state.set_state(AdminStates.waiting_for_unban_user_id)
+
+@router.message(AdminStates.waiting_for_unban_user_id, F.text)
+async def process_unban_user_id(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+
+    try:
+        user_id_to_unban = int(message.text.strip())
+    except ValueError:
+        await message.reply("Неверный формат ID пользователя. ID должен быть числом.", reply_markup=cancel_keyboard)
+        return
+
+    from utils.data_manager import remove_banned_user # Import here to avoid circular dependency
+
+    if await remove_banned_user(user_id_to_unban):
+        await message.reply(f"✅ Пользователь с ID {user_id_to_unban} успешно разбанен.")
+    else:
+        await message.reply(f"❌ Пользователь с ID {user_id_to_unban} не найден в черном списке.")
+    
+    await state.clear()
+    await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+
+
+# Helper function to update config.py
 
 # Helper functions for name formatting
 def _is_garbage_name(name: str) -> bool:

@@ -31,7 +31,9 @@ async def start_test(message: Message, state: FSMContext, bot: Bot):
     logging.info(f"[handlers/test.py] Starting test for user ID: {user_id}")
     await update_last_active(int(user_id))
     
-    words = word_manager.load_words(user_id)
+    words = word_manager.load_words(int(user_id)) # Cast user_id to int
+    
+    logging.info(f"[handlers/test.py] Loaded {len(words)} words for user {user_id} from file: {word_manager.get_user_current_file(int(user_id))}") # Added logging
     
     # Определяем количество вопросов для теста
     num_questions = min(len(words), TEST_QUESTIONS_COUNT)
@@ -58,6 +60,7 @@ async def start_test(message: Message, state: FSMContext, bot: Bot):
         start_time=datetime.datetime.now() # Добавляем время начала теста
     )
     
+    await message.answer("Результаты вашего теста будут отображаться в статистике только после его завершения!")
     await message.answer(f"Начинаем тест! Ответьте на {num_questions} вопросов.")
     await send_test_question(message, state)
 

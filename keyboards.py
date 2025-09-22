@@ -12,6 +12,10 @@ main_menu_keyboard = ReplyKeyboardMarkup(
     one_time_keyboard=False
 )
 
+cancel_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_audio_upload")]
+])
+
 # Learn Words
 learn_words_keyboard = ReplyKeyboardMarkup(
     keyboard=[
@@ -64,6 +68,7 @@ my_set_keyboard = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="➕ Добавить слово", callback_data="add_my_word")],
     [InlineKeyboardButton(text="➖ Удалить слово", callback_data="del_my_word")],
     [InlineKeyboardButton(text="📖 Показать список слов", callback_data="show_my_word_list")],
+    [InlineKeyboardButton(text="🗑️ Удалить набор", callback_data="delete_my_word_set")],
     [InlineKeyboardButton(text="⬆️ В главное меню", callback_data="back_to_main_from_my_set")]
 ])
 
@@ -79,5 +84,26 @@ def create_file_selection_keyboard(available_files: list[str], current_file: str
 
 # Клавиатура для отмены ввода имени файла при добавлении нового аудио
 cancel_keyboard_for_filename = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_audio_filename_entry")]
+    [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_audio_upload")]
 ])
+
+# Клавиатура для подтверждения удаления пользовательского набора слов
+delete_my_set_confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="Да, удалить", callback_data="confirm_delete_my_word_set")],
+    [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_delete_my_word_set")]
+])
+
+# Клавиатура для отмены добавления/удаления слов
+cancel_add_del_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_add_del_word")]
+])
+
+# Клавиатура для подтверждения рассылки
+confirm_broadcast_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Да, отправить")],
+        [KeyboardButton(text="Отмена")]
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=True
+)

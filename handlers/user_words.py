@@ -3,20 +3,25 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from keyboards import main_menu_keyboard, confirm_create_set_keyboard, my_set_keyboard, create_file_selection_keyboard
+from keyboards import main_menu_keyboard, confirm_create_set_keyboard, my_set_keyboard, create_file_selection_keyboard, delete_my_set_confirm_keyboard, cancel_add_del_keyboard
 from utils.word_manager import word_manager
 from utils.bad_words import is_bad_word
 from database import get_user_display_name
 from typing import Dict, List
 import html
 import os
+import logging
 from config import MAX_USER_WORDS # Импортируем MAX_USER_WORDS из config.py
+from utils.data_manager import get_banned_users
+
+logger = logging.getLogger(__name__)
 
 
 class UserWordStates(StatesGroup):
     waiting_for_create_confirm = State()
     waiting_for_add_word = State()
     waiting_for_del_word = State()
+    waiting_for_delete_confirm = State()
 
 
 router = Router()
@@ -31,17 +36,23 @@ async def _get_user_display_name(user_id: int) -> str:
 @router.message(Command("my_set"))
 async def my_word_set_command(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    user_display_name = await _get_user_display_name(user_id) # Используем функцию для получения имени
-    custom_filename = word_manager.get_user_custom_filename(user_id, user_display_name)
+    if user_id in await get_banned_users():
+        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.")
+        return
+    user_display_name = await _get_user_display_name(user_id)
+    current_user_file = word_manager.get_user_current_file(user_id) # Получаем текущий активный файл пользователя
+    current_file_path = os.path.join(word_manager.data_dir, current_user_file)
+    logger.debug(f"[my_word_set_command] User ID: {user_id}, Display Name: {user_display_name}, Current User File: {current_user_file}")
+    logger.debug(f"[my_word_set_command] Checking file existence for path: {current_file_path}, Exists: {os.path.exists(current_file_path)}")
 
-    # Проверяем, существует ли уже пользовательский файл
-    if os.path.exists(os.path.join(word_manager.data_dir, custom_filename)):
-        info = word_manager.get_file_info(custom_filename)
+    # Проверяем, существует ли уже пользовательский файл и не является ли он дефолтным "words.json"
+    if os.path.exists(current_file_path) and current_user_file != "words.json":
+        info = word_manager.get_file_info(current_user_file)
         if info:
-            words = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, custom_filename))
+            words = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, current_user_file))
             
             message_text = (
-                f"📁 <b>Ваш личный набор слов:</b> {html.escape(custom_filename)}\n"
+                f"📁 <b>Ваш личный набор слов:</b> {html.escape(current_user_file)}\n"
                 f"📊 Количество слов: {info['word_count']} / {MAX_USER_WORDS}\n"
                 f"⚠️ Примечание: Для этих слов могут отсутствовать картинки и аудио.\n\n"
             )
@@ -71,7 +82,8 @@ async def my_word_set_command(message: Message, state: FSMContext):
         # Предлагаем создать новый набор
         await message.answer(
             f"У вас пока нет личного набора слов. Вы хотите создать его?\n"
-            f"Ваш набор будет называться: <b>{html.escape(custom_filename.replace('.json', ''))}</b>",
+            f"Ваш набор будет назван: <b>{html.escape(word_manager.get_user_custom_filename(user_id, user_display_name))}*****.json</b>\n"
+            f"Где ***** - случайные символы.",
             parse_mode="HTML",
             reply_markup=confirm_create_set_keyboard
         )
@@ -80,20 +92,24 @@ async def my_word_set_command(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "create_my_word_set", UserWordStates.waiting_for_create_confirm)
 async def create_my_word_set(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id in await get_banned_users():
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await state.clear()
+        return
     await callback.answer()
     user_id = callback.from_user.id
     user_display_name = await _get_user_display_name(user_id)
-    custom_filename = word_manager.get_user_custom_filename(user_id, user_display_name)
+    logger.debug(f"[create_my_word_set] User ID: {user_id}, Display Name: {user_display_name}")
 
-    if word_manager.create_new_file(custom_filename):
-        word_manager.set_user_current_file(user_id, custom_filename)
+    created_filename = word_manager.create_new_file(user_id, user_display_name)
+
+    if created_filename:
+        logger.debug(f"[create_my_word_set] Successfully created and set current file to: {created_filename}")
         
         # После создания сразу показываем пустой список слов и кнопки управления
         await callback.message.edit_text(
-            f"✅ Ваш личный набор слов <b>{html.escape(custom_filename)}</b> успешно создан!\n"
+            f"✅ Ваш личный набор слов <b>{html.escape(created_filename)}</b> успешно создан!\n"
             f"Ваш набор слов пуст ({0} / {MAX_USER_WORDS}). Добавьте слова с помощью кнопки '➕ Добавить слово'.\n\n"
-            f"  • Для добавления используйте: /add_my_word <code>английское_слово=русский_перевод</code>\n"
-            f"  • Для удаления используйте: /del_my_word <code>английское_слово</code>\n"
             f"⚠️ Примечание: Для этих слов могут отсутствовать картинки и аудио.\n\n"
             f"Выберите действие:",
             parse_mode="HTML",
@@ -162,14 +178,23 @@ async def cancel_create_word_set(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "add_my_word")
 async def add_my_word_command(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id in await get_banned_users():
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await state.clear()
+        return
     await callback.answer()
     user_id = callback.from_user.id
-    user_display_name = await _get_user_display_name(user_id)
-    custom_filename = word_manager.get_user_custom_filename(user_id, user_display_name)
+    current_user_file = word_manager.get_user_current_file(user_id) # Получаем текущий активный файл пользователя
+    current_file_path = os.path.join(word_manager.data_dir, current_user_file)
+    logger.debug(f"[add_my_word_command] User ID: {user_id}, Current User File: {current_user_file}")
+    logger.debug(f"[add_my_word_command] Checking file existence for path: {current_file_path}, Exists: {os.path.exists(current_file_path)}")
 
-    if not os.path.exists(os.path.join(word_manager.data_dir, custom_filename)):
+    if not os.path.exists(current_file_path) or current_user_file == "words.json":
         await callback.message.edit_text(
-            "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала.",
+            "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала."
+        )
+        await callback.message.answer(
+            "Возвращаемся в главное меню.",
             reply_markup=main_menu_keyboard
         )
         await state.clear()
@@ -178,7 +203,8 @@ async def add_my_word_command(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         f"Пожалуйста, отправьте английское слово и его русский перевод в формате: <code>английское_слово=русский_перевод</code>\n"
         f"(Максимум слов в наборе: {MAX_USER_WORDS})",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=cancel_add_del_keyboard
     )
     await state.set_state(UserWordStates.waiting_for_add_word)
 
@@ -186,10 +212,16 @@ async def add_my_word_command(callback: CallbackQuery, state: FSMContext):
 @router.message(UserWordStates.waiting_for_add_word, F.text)
 async def process_add_my_word(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    user_display_name = await _get_user_display_name(user_id)
-    custom_filename = word_manager.get_user_custom_filename(user_id, user_display_name)
+    if user_id in await get_banned_users():
+        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.")
+        await state.clear()
+        return
+    current_user_file = word_manager.get_user_current_file(user_id) # Получаем текущий активный файл пользователя
+    current_file_path = os.path.join(word_manager.data_dir, current_user_file)
+    logger.debug(f"[process_add_my_word] User ID: {user_id}, Current User File: {current_user_file}")
+    logger.debug(f"[process_add_my_word] Checking file existence for path: {current_file_path}, Exists: {os.path.exists(current_file_path)}")
 
-    if not os.path.exists(os.path.join(word_manager.data_dir, custom_filename)):
+    if not os.path.exists(current_file_path) or current_user_file == "words.json":
         await message.answer(
             "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала.",
             reply_markup=main_menu_keyboard
@@ -198,7 +230,7 @@ async def process_add_my_word(message: Message, state: FSMContext):
         return
 
     # Проверка на лимит слов
-    current_words = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, custom_filename))
+    current_words = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, current_user_file))
     if len(current_words) >= MAX_USER_WORDS:
         await message.answer(
             f"❌ Вы достигли максимального количества слов ({MAX_USER_WORDS}) в вашем личном наборе. "
@@ -213,8 +245,9 @@ async def process_add_my_word(message: Message, state: FSMContext):
     if "=" not in word_pair_str:
         await message.answer(
             "Неверный формат. Используйте: <code>английское_слово=русский_перевод</code>. "
-            "Пожалуйста, попробуйте снова или /cancel для отмены.",
-            parse_mode="HTML"
+            "Пожалуйста, попробуйте снова или нажмите '❌ Отмена'.",
+            parse_mode="HTML",
+            reply_markup=cancel_add_del_keyboard
         )
         return
 
@@ -237,7 +270,7 @@ async def process_add_my_word(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    if word_manager.add_word_to_file(custom_filename, {"en": en_word, "ru": ru_word}):
+    if word_manager.add_word_to_file(current_user_file, {"en": en_word, "ru": ru_word}):
         await message.answer(
             f"✅ Слово <code>{html.escape(en_word)}={html.escape(ru_word)}</code> успешно добавлено в ваш личный набор!\n"
             "⚠️ Примечание: Для этого слова могут отсутствовать картинки и аудио.",
@@ -247,6 +280,7 @@ async def process_add_my_word(message: Message, state: FSMContext):
     else:
         await message.answer(
             "❌ Не удалось добавить слово. Возможно, произошла ошибка.",
+            parse_mode="HTML",
             reply_markup=my_set_keyboard
         )
     await state.clear()
@@ -254,12 +288,18 @@ async def process_add_my_word(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "del_my_word")
 async def del_my_word_command(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id in await get_banned_users():
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await state.clear()
+        return
     await callback.answer()
     user_id = callback.from_user.id
-    user_display_name = await _get_user_display_name(user_id)
-    custom_filename = word_manager.get_user_custom_filename(user_id, user_display_name)
+    current_user_file = word_manager.get_user_current_file(user_id) # Получаем текущий активный файл пользователя
+    current_file_path = os.path.join(word_manager.data_dir, current_user_file)
+    logger.debug(f"[del_my_word_command] User ID: {user_id}, Current User File: {current_user_file}")
+    logger.debug(f"[del_my_word_command] Checking file existence for path: {current_file_path}, Exists: {os.path.exists(current_file_path)}")
 
-    if not os.path.exists(os.path.join(word_manager.data_dir, custom_filename)):
+    if not os.path.exists(current_file_path) or current_user_file == "words.json":
         await callback.message.edit_text(
             "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала.",
             reply_markup=main_menu_keyboard
@@ -269,7 +309,7 @@ async def del_my_word_command(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text(
         "Пожалуйста, отправьте английское слово, которое вы хотите удалить из вашего набора.",
-        reply_markup=None
+        reply_markup=cancel_add_del_keyboard
     )
     await state.set_state(UserWordStates.waiting_for_del_word)
 
@@ -277,10 +317,16 @@ async def del_my_word_command(callback: CallbackQuery, state: FSMContext):
 @router.message(UserWordStates.waiting_for_del_word, F.text)
 async def process_del_my_word(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    user_display_name = await _get_user_display_name(user_id)
-    custom_filename = word_manager.get_user_custom_filename(user_id, user_display_name)
+    if user_id in await get_banned_users():
+        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.")
+        await state.clear()
+        return
+    current_user_file = word_manager.get_user_current_file(user_id) # Получаем текущий активный файл пользователя
+    current_file_path = os.path.join(word_manager.data_dir, current_user_file)
+    logger.debug(f"[process_del_my_word] User ID: {user_id}, Current User File: {current_user_file}")
+    logger.debug(f"[process_del_my_word] Checking file existence for path: {current_file_path}, Exists: {os.path.exists(current_file_path)}")
 
-    if not os.path.exists(os.path.join(word_manager.data_dir, custom_filename)):
+    if not os.path.exists(current_file_path) or current_user_file == "words.json":
         await message.answer(
             "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала.",
             reply_markup=main_menu_keyboard
@@ -291,11 +337,13 @@ async def process_del_my_word(message: Message, state: FSMContext):
     en_word_to_delete = message.text.strip().lower()
     if not en_word_to_delete:
         await message.answer(
-            "Слово для удаления не может быть пустым. Пожалуйста, попробуйте снова или /cancel для отмены."
+            "Слово для удаления не может быть пустым. Пожалуйста, попробуйте снова или нажмите '❌ Отмена'.",
+            parse_mode="HTML",
+            reply_markup=cancel_add_del_keyboard
         )
         return
 
-    if word_manager.delete_word_from_file(custom_filename, en_word_to_delete):
+    if word_manager.delete_word_from_file(current_user_file, en_word_to_delete):
         await message.answer(
             f"✅ Слово <code>{html.escape(en_word_to_delete)}</code> успешно удалено из вашего личного набора.",
             parse_mode="HTML",
@@ -313,6 +361,9 @@ async def process_del_my_word(message: Message, state: FSMContext):
 @router.message(Command("switch_my_set"))
 async def switch_my_set_command(message: Message, state: FSMContext):
     user_id = message.from_user.id
+    if user_id in await get_banned_users():
+        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.")
+        return
     available_files = word_manager.get_available_files()
     current_file = word_manager.get_user_current_file(user_id)
 
@@ -331,6 +382,10 @@ async def switch_my_set_command(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("select_file_"))
 async def process_select_file(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id in await get_banned_users():
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await state.clear()
+        return
     await callback.answer()
     user_id = callback.from_user.id
     selected_filename = callback.data.replace("select_file_", "")
@@ -361,6 +416,9 @@ async def back_to_main_from_my_set_select_file_callback(callback: CallbackQuery,
 @router.message(Command("list"))
 async def list_user_words(message: Message, state: FSMContext):
     user_id = message.from_user.id
+    if user_id in await get_banned_users():
+        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.")
+        return
     
     parts = message.text.split(maxsplit=1)
     target_filename = word_manager.get_user_current_file(user_id) # По умолчанию - текущий файл пользователя
@@ -402,6 +460,10 @@ async def list_user_words(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "show_my_word_list")
 async def show_my_word_list_callback(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id in await get_banned_users():
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await state.clear()
+        return
     await callback.answer()
     user_id = callback.from_user.id
     current_file = word_manager.get_user_current_file(user_id)
@@ -430,3 +492,83 @@ async def show_my_word_list_callback(callback: CallbackQuery, state: FSMContext)
         parse_mode="HTML",
         reply_markup=my_set_keyboard
     )
+
+@router.callback_query(F.data == "delete_my_word_set")
+async def delete_my_word_set_command(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id in await get_banned_users():
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await state.clear()
+        return
+    await callback.answer()
+    user_id = callback.from_user.id
+    current_user_file = word_manager.get_user_current_file(user_id)
+
+    if current_user_file == "words.json":
+        await callback.message.edit_text(
+            "Вы не можете удалить основной набор слов.",
+            reply_markup=my_set_keyboard
+        )
+        await state.clear()
+        return
+
+    await callback.message.edit_text(
+        f"Вы уверены, что хотите удалить свой личный набор слов <b>{html.escape(current_user_file)}</b>? Это действие нельзя отменить.",
+        parse_mode="HTML",
+        reply_markup=delete_my_set_confirm_keyboard
+    )
+    await state.set_state(UserWordStates.waiting_for_delete_confirm)
+
+
+@router.callback_query(F.data == "confirm_delete_my_word_set", UserWordStates.waiting_for_delete_confirm)
+async def confirm_delete_my_word_set(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id in await get_banned_users():
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await state.clear()
+        return
+    await callback.answer()
+    user_id = callback.from_user.id
+    current_user_file = word_manager.get_user_current_file(user_id)
+
+    if current_user_file == "words.json":
+        await callback.message.edit_text(
+            "Невозможно удалить основной набор слов.",
+            reply_markup=my_set_keyboard
+        )
+        await state.clear()
+        return
+
+    if word_manager.delete_file(current_user_file):
+        # Сбрасываем текущий файл пользователя на дефолтный
+        word_manager.set_user_current_file(user_id, "words.json")
+        await callback.message.edit_text(
+            f"✅ Ваш личный набор слов <b>{html.escape(current_user_file)}</b> успешно удален.",
+            parse_mode="HTML"
+        )
+        await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+    else:
+        await callback.message.edit_text(
+            f"❌ Не удалось удалить набор слов <b>{html.escape(current_user_file)}</b>. Возможно, файл не существует или произошла ошибка.",
+            parse_mode="HTML",
+            reply_markup=my_set_keyboard
+        )
+    await state.clear()
+
+
+@router.callback_query(F.data == "cancel_delete_my_word_set", UserWordStates.waiting_for_delete_confirm)
+async def cancel_delete_my_word_set(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    await callback.message.edit_text("Удаление набора слов отменено.", reply_markup=None)
+    await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+
+
+@router.callback_query(F.data == "cancel_add_del_word", StateFilter(UserWordStates.waiting_for_add_word, UserWordStates.waiting_for_del_word))
+async def cancel_add_del_word_action(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id in await get_banned_users():
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await state.clear()
+        return
+    await callback.answer()
+    await state.clear()
+    await callback.message.edit_text("Действие отменено.", reply_markup=None)
+    await callback.message.answer("Возвращаемся в меню управления набором слов.", reply_markup=my_set_keyboard)
