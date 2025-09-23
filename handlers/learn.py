@@ -11,6 +11,7 @@ from utils.audio_cleanup import cleanup_guess_audio
 from utils.word_manager import word_manager # Импортируем word_manager
 from database import update_last_active
 import asyncio
+from handlers.user_words import switch_my_set_command # Импорт switch_my_set_command
 
 router = Router()
 
@@ -133,10 +134,6 @@ async def back_to_main_from_learn(message: Message, state: FSMContext, bot: Bot)
     await state.clear() # Перемещено в конец после очистки аудио
     await message.answer("Вы вернулись в главное меню.", reply_markup=main_menu_keyboard)
 
-@router.message(F.text == "🧹 Очистить чат")
-async def cleanup_chat(message: Message, bot: Bot):
-    """Manual cleanup command for users"""
-    status_message = await message.answer("Пытаюсь чистить чат, ждите...")
-    await cleanup_old_audio_messages(message, bot)
-    await status_message.edit_text("Чистка закончена! Но возможно не все сообщения были удалены.")
-    await message.answer("Вы можете самостоятельно очистить всю историю чата в меню Telegram. \n\nИспользуйте команду /start если не отображаются кнопки или попробуйте перезапустить бота.")
+@router.message(F.text == "🔁 Сменить набор")
+async def switch_set_via_button(message: Message, state: FSMContext):
+    await switch_my_set_command(message, state) # Вызываем функцию смены набора из user_words.py

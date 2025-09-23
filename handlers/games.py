@@ -9,7 +9,7 @@ from utils.utils import get_random_word, shuffle_word, get_quiz_options
 import uuid
 from database import update_last_active
 from keyboards import games_menu_keyboard, main_menu_keyboard, quiz_options_keyboard, start_recall_typing_keyboard
-from utils.data_manager import load_stats, update_user_stats, update_game_stats
+from utils.data_manager import update_game_stats
 import datetime
 from handlers.stats import show_statistics_handler # Import the function for unified stats display
 import asyncio
@@ -110,14 +110,16 @@ async def process_guess_word_answer(callback: CallbackQuery, state: FSMContext):
             f"Слово по аудио: *{correct_english_word}*\nВаш ответ: *{chosen_answer}* - ✅ Верно!",
             parse_mode="Markdown"
         )
-        await update_game_stats(user_id, "guess_word", True, current_date)
+        current_word_set = word_manager.get_user_current_file(int(user_id))
+        await update_game_stats(int(user_id), "guess_word", True, current_date, word_set_name=current_word_set)
     else:
         await callback.answer("Неверно.", show_alert=False)
         await callback.message.edit_text(
             f"Слово по аудио: *{correct_english_word}*\nВаш ответ: *{chosen_answer}* - ❌ Неверно. Правильный ответ: *{correct_russian_word}*",
             parse_mode="Markdown"
         )
-        await update_game_stats(user_id, "guess_word", False, current_date)
+        current_word_set = word_manager.get_user_current_file(int(user_id))
+        await update_game_stats(int(user_id), "guess_word", False, current_date, word_set_name=current_word_set)
 
     await callback.message.answer(
         "Хотите еще раз сыграть?",
@@ -208,7 +210,8 @@ async def process_choose_translation_answer(callback: CallbackQuery, state: FSMC
             f"\nВаш ответ: *{chosen_answer}* - ✅ Верно!",
             parse_mode="Markdown"
         )
-        await update_game_stats(user_id, "choose_translation", True, current_date)
+        current_word_set = word_manager.get_user_current_file(int(user_id))
+        await update_game_stats(int(user_id), "choose_translation", True, current_date, word_set_name=current_word_set)
     else:
         await callback.answer("Неверно.", show_alert=False)
         await callback.message.edit_text(
@@ -216,7 +219,8 @@ async def process_choose_translation_answer(callback: CallbackQuery, state: FSMC
             f"\nВаш ответ: *{chosen_answer}* - ❌ Неверно. Правильный ответ: *{correct_russian_word}*",
             parse_mode="Markdown"
         )
-        await update_game_stats(user_id, "choose_translation", False, current_date)
+        current_word_set = word_manager.get_user_current_file(int(user_id))
+        await update_game_stats(int(user_id), "choose_translation", False, current_date, word_set_name=current_word_set)
     
     await callback.message.answer(
         "Хотите еще раз сыграть?",
@@ -348,7 +352,8 @@ async def process_find_missing_letter_answer(callback: CallbackQuery, state: FSM
             f"\nВаш ответ: *{chosen_answer}* - ✅ Верно!",
             parse_mode="Markdown"
         )
-        await update_game_stats(user_id, "find_missing_letter", True, current_date)
+        current_word_set = word_manager.get_user_current_file(int(user_id))
+        await update_game_stats(int(user_id), "find_missing_letter", True, current_date, word_set_name=current_word_set)
     else:
         await callback.answer("Неверно.", show_alert=False)
         await callback.message.edit_text(
@@ -356,7 +361,8 @@ async def process_find_missing_letter_answer(callback: CallbackQuery, state: FSM
             f"\nВаш ответ: *{chosen_answer}* - ❌ Неверно. Правильная буква: *{correct_missing_letter}*",
             parse_mode="Markdown"
         )
-        await update_game_stats(user_id, "find_missing_letter", False, current_date)
+        current_word_set = word_manager.get_user_current_file(int(user_id))
+        await update_game_stats(int(user_id), "find_missing_letter", False, current_date, word_set_name=current_word_set)
 
     await callback.message.answer(
         "Хотите еще раз сыграть?",
@@ -386,14 +392,16 @@ async def process_build_word_answer(message: Message, state: FSMContext):
             f"✅ Верно! Слово: *{correct_english_word.capitalize()}* (перевод: *{russian_translation}*)",
             parse_mode="Markdown"
         )
-        await update_game_stats(user_id, "build_word", True, current_date)
+        current_word_set = word_manager.get_user_current_file(int(user_id))
+        await update_game_stats(int(user_id), "build_word", True, current_date, word_set_name=current_word_set)
     else:
         await message.answer(
             f"❌ Неверно. Попробуй еще раз или введи другое слово."
             f"Правильный ответ: *{correct_english_word.capitalize()}* (перевод: *{russian_translation}*)",
             parse_mode="Markdown"
         )
-        await update_game_stats(user_id, "build_word", False, current_date)
+        current_word_set = word_manager.get_user_current_file(int(user_id))
+        await update_game_stats(int(user_id), "build_word", False, current_date, word_set_name=current_word_set)
     
     await message.answer(
         "Хотите сыграть еще раз?",
@@ -530,13 +538,15 @@ async def process_recall_typing_answer(message: Message, state: FSMContext):
             f"✅ Верно! Слово: *{correct_english_word.capitalize()}* (перевод: *{russian_translation}*)\n"
             f"Время ответа: *{time_taken:.2f}* секунд."
         )
-        await update_game_stats(user_id, "recall_typing", True, current_date, time_taken=time_taken)
+        current_word_set = word_manager.get_user_current_file(int(user_id))
+        await update_game_stats(int(user_id), "recall_typing", True, current_date, time_taken=time_taken, word_set_name=current_word_set)
     else:
         feedback_text = (
             f"❌ Неверно. Правильное слово: *{correct_english_word.capitalize()}* (перевод: *{russian_translation}*)\n"
             f"Ваш ответ: *{user_answer}*"
         )
-        await update_game_stats(user_id, "recall_typing", False, current_date)
+        current_word_set = word_manager.get_user_current_file(int(user_id))
+        await update_game_stats(int(user_id), "recall_typing", False, current_date, word_set_name=current_word_set)
     
     await message.answer(feedback_text, parse_mode="Markdown")
 

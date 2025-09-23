@@ -31,7 +31,9 @@ async def add_word(new_word: dict, filename: str = "words.json") -> bool:
 
 async def get_words_alphabetical(filename: str = "words.json") -> list[dict]:
     """Loads words from the specified file and returns them sorted alphabetically by English word."""
-    words = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, filename))
+    # Since filename is passed, we construct the full path using word_manager's data_dir and words subdirectory
+    file_path = os.path.join(word_manager.data_dir, "words", filename)
+    words = word_manager.load_words_from_file(file_path)
     return sorted(words, key=lambda x: x['en'].lower())
 
 async def delete_word(word_to_delete_en: str, filename: str = "words.json") -> bool:

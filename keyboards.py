@@ -5,7 +5,7 @@ main_menu_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📚 Учить слова"), KeyboardButton(text="🎮 Игры")],
         [KeyboardButton(text="📝 Тест знаний"), KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="❓ Справка"), KeyboardButton(text="🧹 Очистить чат")],
+        [KeyboardButton(text="❓ Справка"), KeyboardButton(text="🔁 Сменить набор")],
         [KeyboardButton(text="⬆️ В главное меню")]
     ],
     resize_keyboard=True,
@@ -64,13 +64,20 @@ confirm_create_set_keyboard = InlineKeyboardMarkup(inline_keyboard=[
 ])
 
 # Клавиатура для управления пользовательским набором слов
-my_set_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="➕ Добавить слово", callback_data="add_my_word")],
-    [InlineKeyboardButton(text="➖ Удалить слово", callback_data="del_my_word")],
-    [InlineKeyboardButton(text="📖 Показать список слов", callback_data="show_my_word_list")],
-    [InlineKeyboardButton(text="🗑️ Удалить набор", callback_data="delete_my_word_set")],
-    [InlineKeyboardButton(text="⬆️ В главное меню", callback_data="back_to_main_from_my_set")]
-])
+def get_my_set_keyboard(is_personal_set: bool = False) -> InlineKeyboardMarkup:
+    keyboard_buttons = []
+
+    if is_personal_set:
+        keyboard_buttons.append([InlineKeyboardButton(text="➕ Добавить слово", callback_data="add_my_word")])
+        keyboard_buttons.append([InlineKeyboardButton(text="➖ Удалить слово", callback_data="del_my_word")])
+        keyboard_buttons.append([InlineKeyboardButton(text="🗑️ Удалить набор", callback_data="delete_my_word_set")])
+        keyboard_buttons.append([InlineKeyboardButton(text="📖 Показать список слов", callback_data="show_my_word_list")])
+    else:
+        keyboard_buttons.append([InlineKeyboardButton(text="📖 Показать список слов", callback_data="show_my_word_list")])
+
+    keyboard_buttons.append([InlineKeyboardButton(text="⬆️ В главное меню", callback_data="back_to_main_from_my_set")])
+
+    return InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
 
 def create_file_selection_keyboard(available_files: list[str], current_file: str) -> InlineKeyboardMarkup:
     """Создает InlineKeyboardMarkup для выбора файлов со словами."""

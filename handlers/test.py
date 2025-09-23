@@ -5,9 +5,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from utils.utils import get_quiz_options
-from database import save_test_result, update_last_active
+from database import save_test_result, update_last_active, get_user_stats, update_user_best_test_time
 from keyboards import main_menu_keyboard, quiz_options_keyboard
-from utils.data_manager import load_stats, update_user_stats
 from utils.word_manager import word_manager # Импортируем word_manager
 from aiogram import Bot # Добавлено для явной передачи bot
 from config import TEST_QUESTIONS_COUNT
@@ -197,33 +196,19 @@ async def finish_test(message: Message, state: FSMContext):
     except Exception:
         pass
 
-    await save_test_result(int(user_id), correct_answers, actual_num_questions)
+    # Get the current word set name
+    current_word_set = word_manager.get_user_current_file(int(user_id))
+    await save_test_result(int(user_id), correct_answers, actual_num_questions, word_set_name=current_word_set)
 
-    # Загружаем самые актуальные данные статистики перед окончательным обновлением
-    all_stats = await load_stats()
-    user_stats = all_stats.get(user_id, {})
-
-    user_stats.setdefault('total_correct_answers', 0)
-    user_stats.setdefault('best_test_score', 0)
-    user_stats.setdefault('last_activity_date', "N/A")
-    user_stats.setdefault('best_test_time', float('inf')) # Инициализируем лучшее время
-
-    user_stats['total_correct_answers'] += correct_answers
-    if correct_answers > user_stats['best_test_score']:
-        user_stats['best_test_score'] = correct_answers
-    user_stats['last_activity_date'] = datetime.datetime.now().isoformat()
+    # Fetch updated stats to compare best_test_time
+    current_user_stats = await get_user_stats(int(user_id))
+    current_best_test_time = current_user_stats.get('best_test_time', float('inf'))
     
-    if test_duration < user_stats['best_test_time']:
-        user_stats['best_test_time'] = test_duration
-
-    # Сохраняем обновленные данные в stats.json
-    await update_user_stats(
-        user_id,
-        user_stats['total_correct_answers'],
-        user_stats['best_test_score'],
-        user_stats['last_activity_date'],
-        user_stats['best_test_time'] # Передаем лучшее время
-    )
+    if test_duration < current_best_test_time:
+        await update_user_best_test_time(int(user_id), test_duration)
+    
+    # update_last_active is called at the start of the test, and save_test_result updates best_test_score.
+    # So, no need to manually update these here again.
 
     await message.answer(
         f"Тест завершен! Вы ответили правильно на *{correct_answers}* из *{actual_num_questions}* вопросов.",

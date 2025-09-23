@@ -3,11 +3,11 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from config import ADMIN_IDS
 from utils.utils import add_word, get_words_alphabetical, delete_word
-from utils.data_manager import calculate_overall_score_and_rank, delete_user_stats_entry
+from utils.data_manager import calculate_overall_score_and_rank
 from utils.word_manager import word_manager
 import datetime
 from utils.audio_converter import convert_ogg_to_mp3 # Импорт для админской команды конвертации
-from database import delete_user_from_db, get_all_users # Импорт get_all_users
+from database import delete_user_from_db, get_all_users, get_game_stats_by_word_set # Импорт get_all_users и get_game_stats_by_word_set
 import html # Import the html module for escaping
 import re # Add this import
 import json # Add this import for json.loads
@@ -32,6 +32,15 @@ class AdminStates(StatesGroup):
     waiting_for_ban_user_id = State()
     waiting_for_unban_user_id = State()
     waiting_for_broadcast_text = State()
+
+GAME_NAME_TRANSLATIONS = {
+    "guess_word": "Угадай слово (по аудио)",
+    "choose_translation": "Выбери перевод",
+    "build_word": "Собери слово",
+    "find_missing_letter": "Найди букву",
+    "recall_typing": "Ввод по памяти",
+    "test": "Тест знаний", # Добавил тест знаний на случай, если вы решите добавить статистику тестов сюда же.
+}
 
 router = Router()
 
@@ -191,13 +200,21 @@ async def show_all_user_stats(message: Message):
         user_id = user_entry['user_id']
         rank = user_entry['rank']
         overall_score = user_entry['overall_score']
-        current_user_stats = user_entry['stats'] # Get the full stats for the current user
 
         # Get detailed stats with default values
-        total_correct_answers = current_user_stats.get('total_correct_answers', 0)
-        best_test_score = current_user_stats.get('best_test_score', 0)
-        last_activity_date_str = current_user_stats.get('last_activity_date', 'N/A')
+        total_correct_answers = user_entry.get('total_correct_answers', 0) or 0
+        best_test_score = user_entry.get('best_test_score', 0) or 0
+        last_activity_date_str = user_entry.get('last_activity_date', 'N/A') or 'N/A'
+
+        # Calculate total game correct for OKPO
+        total_game_correct = 0
+        if 'games_stats' in user_entry:
+            for game_type, game_data in user_entry['games_stats'].items():
+                total_game_correct += game_data.get('correct', 0)
         
+        # Calculate OKPO
+        overall_correct_answers = total_correct_answers + total_game_correct
+
         # Format last activity date
         formatted_last_activity = last_activity_date_str
         if last_activity_date_str != 'N/A':
@@ -217,15 +234,30 @@ async def show_all_user_stats(message: Message):
         )
         escaped_username_for_display = html.escape(str(user_entry.get('username', '') or ''))
         username_display_text = f" (@{escaped_username_for_display})" if escaped_username_for_display else " (No username)"
-        
+
         # Create a user profile link (HTML format)
         user_link = f"<a href=\"tg://user?id={user_id}\">{display_name_for_link}</a>"
-        
+
         stats_text += f"<b>Ранг: {rank}</b> - {user_link}{username_display_text} (Балл: <b>{overall_score:.2f}</b>)\n"
-        stats_text += f"  - ОКПО: <b>{total_correct_answers}</b> | Тест: <b>{best_test_score}</b> | ПА: <b>{formatted_last_activity}</b>\n"
-        
-        # Removed game stats as per user request
-        # stats_text += f"\n"
+        stats_text += f"  - ОКПО: <b>{overall_correct_answers}</b> | Тест: <b>{best_test_score}</b> | ПА: <b>{formatted_last_activity}</b>\n"
+
+        # Get and display game stats by word set
+        game_stats_by_set = await get_game_stats_by_word_set(user_id)
+        if game_stats_by_set:
+            stats_text += "  <b>Статистика по наборам слов:</b>\n"
+            for word_set, games in game_stats_by_set.items():
+                stats_text += f"    └ 📁 `{html.escape(word_set)}`:\n"
+                for game_type, stats in games.items():
+                    correct = stats.get('correct', 0)
+                    played = stats.get('played', 0)
+                    incorrect = stats.get('incorrect', 0)
+                    best_time_str = f" ({stats['best_time']:.2f}с)" if stats['best_time'] and stats['best_time'] != float('inf') else ""
+                    
+                    # Применяем перевод названия игры
+                    translated_game_name = GAME_NAME_TRANSLATIONS.get(game_type, game_type.replace('_', ' ').title())
+                    
+                    stats_text += f"      • {translated_game_name}: Всего: {played}, Верно: {correct}, Неверно: {incorrect}{best_time_str}\n"
+        stats_text += "\n" # Add a newline for better spacing between users
 
     await message.reply(stats_text, parse_mode="HTML")
 
@@ -247,16 +279,11 @@ async def del_user(message: Message):
         return
 
     db_deleted = await delete_user_from_db(user_id_to_delete)
-    stats_deleted = await delete_user_stats_entry(str(user_id_to_delete))
-
-    if db_deleted and stats_deleted:
-        await message.reply(f"Пользователь с ID {user_id_to_delete} успешно удален из базы данных и статистики.")
-    elif db_deleted:
-        await message.reply(f"Пользователь с ID {user_id_to_delete} удален из базы данных, но не найден в статистике.")
-    elif stats_deleted:
-        await message.reply(f"Пользователь с ID {user_id_to_delete} удален из статистики, но не найден в базе данных.")
+    
+    if db_deleted:
+        await message.reply(f"Пользователь с ID {user_id_to_delete} успешно удален из базы данных.")
     else:
-        await message.reply(f"Пользователь с ID {user_id_to_delete} не найден ни в базе данных, ни в статистике.")
+        await message.reply(f"Пользователь с ID {user_id_to_delete} не найден в базе данных.")
 
 @router.message(Command("files"))
 async def list_word_files(message: Message):
@@ -282,29 +309,46 @@ async def list_word_files(message: Message):
     
     await message.reply(files_text, parse_mode="Markdown")
 
-@router.message(Command("switch"))
-async def switch_word_file(message: Message):
-    """Переключает активный файл со словами."""
+@router.message(Command("switch_set_to_all"))
+async def switch_word_file_for_all_users(message: Message):
+    """Переключает активный файл со словами для ВСЕХ пользователей."""
     if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.reply("Пожалуйста, используйте формат: /switch имя_файла")
+        await message.reply("Пожалуйста, используйте формат: /switch_set_to_all имя_файла")
         return
 
     filename = args[1].strip()
-    if word_manager.set_user_current_file(message.from_user.id, filename):
-        current_info = word_manager.get_file_info(filename)
-        await message.reply(
-            f"✅ Файл успешно переключен на *{filename}*\n"
-            f"📊 Слов в файле: {current_info['word_count']}\n"
-            f"📁 Размер файла: {current_info['file_size']} байт",
-            parse_mode="Markdown"
-        )
-    else:
+    
+    # Проверяем, что файл существует, прежде чем пытаться переключить его для всех
+    if not word_manager.get_file_info(filename):
         await message.reply(f"❌ Файл '{filename}' не найден. Используйте /files для просмотра доступных файлов.")
+        return
+
+    await message.reply(f"Начинаю переключение активного файла на *{filename}* для всех пользователей...", parse_mode="Markdown")
+
+    all_users = await get_all_users() # Получаем всех пользователей из базы данных
+    successful_switches = 0
+    failed_switches = 0
+
+    for user in all_users:
+        user_id = user['user_id']
+        # Получаем display_name для каждого пользователя
+        user_display_name = _get_display_name(user.get('first_name'), user.get('last_name'), user.get('username'), user.get('name'))
+
+        if word_manager.set_user_current_file(user_id, filename, user_display_name):
+            successful_switches += 1
+        else:
+            failed_switches += 1
+        await asyncio.sleep(0.05) # Небольшая задержка для предотвращения превышения лимитов API
+    
+    await message.reply(
+        f"✅ Переключение завершено! Успешно изменено: {successful_switches} пользователей, Не удалось: {failed_switches} пользователей.",
+        parse_mode="Markdown"
+    )
 
 @router.message(Command("create_file"))
 async def create_word_file(message: Message):
@@ -371,25 +415,38 @@ async def deduplicate_words_command(message: Message):
     else:
         await message.reply(f"ℹ️ В файле `{target_filename}` дубликатов не найдено.", parse_mode="Markdown")
 
-@router.message(Command("current_file"))
-async def show_current_file(message: Message):
-    """Показывает информацию о текущем активном файле."""
+@router.message(Command("current_files"))
+async def show_all_users_current_files(message: Message):
+    """Показывает текущие активные файлы со словами для всех пользователей."""
     if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
-    current_file_for_admin = word_manager.get_user_current_file(message.from_user.id)
-    info = word_manager.get_file_info(current_file_for_admin)
-    
-    if info:
-        await message.reply(
-            f"📁 <b>Текущий активный файл (для вас):</b> {html.escape(current_file_for_admin)}\n"
-            f"📊 Количество слов: {info['word_count']}\n"
-            f"📁 Размер файла: {info['file_size']} байт",
-            parse_mode="HTML"
+    await message.reply("Собираю информацию о текущих файлах всех пользователей... Это может занять некоторое время.", parse_mode="Markdown")
+
+    all_users = await get_all_users()
+    if not all_users:
+        await message.reply("В базе данных нет зарегистрированных пользователей.")
+        return
+
+    files_info_text = "📁 *Текущие файлы пользователей:*\n\n"
+
+    for user in all_users:
+        user_id = user['user_id']
+        display_name = _get_display_name(
+            user.get('first_name'),
+            user.get('last_name'),
+            user.get('username'),
+            user.get('name')
         )
-    else:
-        await message.reply("❌ Ошибка получения информации о текущем файле. Возможно, файл не существует или поврежден.")
+        
+        current_file = word_manager.get_user_current_file(user_id)
+        
+        files_info_text += f"• Пользователь: <a href=\"tg://user?id={user_id}\">{display_name}</a>\n"
+        files_info_text += f"  └ Текущий файл: `{html.escape(current_file)}`\n\n"
+        await asyncio.sleep(0.02) # Небольшая задержка, чтобы избежать перегрузки API Telegram
+
+    await message.reply(files_info_text, parse_mode="HTML")
 
 @router.message(Command("convert_audio"))
 async def convert_audio_command(message: Message):
@@ -865,7 +922,7 @@ async def update_config_file(setting_name: str, new_value: any):
             
             value_to_write = ""
             if isinstance(new_value, str):
-                value_to_write = f"\"{new_value}\""
+                value_to_write = f'"{new_value}"'
             elif isinstance(new_value, list):
                 value_to_write = json.dumps(new_value, ensure_ascii=False)
             else:
@@ -879,7 +936,7 @@ async def update_config_file(setting_name: str, new_value: any):
     if not updated: # Should not happen for predefined settings, but as a fallback for new settings
         value_to_write = ""
         if isinstance(new_value, str):
-            value_to_write = f"\"{new_value}\""
+            value_to_write = f'"{new_value}"'
         elif isinstance(new_value, list):
             value_to_write = json.dumps(new_value, ensure_ascii=False)
         else:

@@ -1,9 +1,12 @@
+
 import asyncio
 import logging
+import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
+from logging.handlers import TimedRotatingFileHandler # Импортируем TimedRotatingFileHandler
 
 from config import TOKEN, ADMIN_IDS
 from database import init_db
@@ -14,9 +17,22 @@ from utils.data_manager import get_banned_users
 
 from handlers import start, learn, games, test, stats, help, admin
 from handlers import user_words # Новый импорт для пользовательских команд
+from utils.asyncio_background_tasks import start_background_tasks # Импортируем функцию для запуска фоновых задач
 
 async def main():
-    logging.basicConfig(level=logging.INFO)
+    # Создаем папку для логов, если ее нет
+    logs_dir = "logs"
+    os.makedirs(logs_dir, exist_ok=True)
+
+    # Настраиваем логирование
+    logging.basicConfig(
+        level=logging.INFO, # Уровень логирования
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(os.path.join(logs_dir, "bot_errors.log"), mode='a', encoding='utf-8'),
+            logging.StreamHandler() # Вывод в консоль
+        ]
+    )
 
     await init_db()
 
@@ -44,6 +60,9 @@ async def main():
     @dp.message(F.text == "⬆️ В главное меню", F.fsm_state == None)
     async def already_in_main_menu(message: Message):
         await message.answer("Вы уже в главном меню.")
+
+    # Запускаем фоновые задачи
+    await start_background_tasks()
 
     await dp.start_polling(bot)
 

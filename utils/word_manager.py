@@ -1,10 +1,13 @@
 import json
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import random
 import string
 import logging
 import datetime
+import re # Added import
+import asyncio # Added import
+import database # Already present
 
 logger = logging.getLogger(__name__)
 
@@ -13,24 +16,80 @@ class WordManager:
     
     def __init__(self, data_dir: str = "data"):
         self.data_dir = data_dir
-        self.config_file_path = os.path.join(self.data_dir, "config.json")
-        self.user_current_files: Dict[int, str] = {} # Словарь для хранения выбранных файлов для каждого пользователя
+        self.config_file_path = os.path.join(self.data_dir, "config", "config.json")
+        # Словарь для хранения выбранных файлов и display_name для каждого пользователя
+        self.user_current_files: Dict[int, Dict[str, str]] = {} 
         self._ensure_data_dir()
         self._load_config() # Загружаем конфигурацию при инициализации
     
     def _ensure_data_dir(self):
-        """Создает директорию data, если она не существует."""
-        if not os.path.exists(self.data_dir):
-            os.makedirs(self.data_dir)
-            logger.debug(f"[_ensure_data_dir] Created data directory: {self.data_dir}")
+        """Создает директории данных, если они не существуют."""
+        main_data_dir = self.data_dir # 'data'
+        words_dir = os.path.join(main_data_dir, "words")
+        config_dir = os.path.join(main_data_dir, "config")
+        sounds_dir = os.path.join(main_data_dir, "sounds")
+        images_dir = os.path.join(main_data_dir, "images")
+        temp_audio_dir = os.path.join(main_data_dir, "temp_audio")
+        db_dir = os.path.join(main_data_dir, "db")
+        
+        for d in [main_data_dir, words_dir, config_dir, sounds_dir, images_dir, temp_audio_dir, db_dir]:
+            if not os.path.exists(d):
+                os.makedirs(d)
+                logger.debug(f"[_ensure_data_dir] Created directory: {d}")
     
+    def _get_sanitized_name(self, name: str) -> str:
+        """Санитизирует имя пользователя для использования в именах файлов или ключах."""
+        sanitized = re.sub(r'[^a-zA-Z0-9_]', '', name.replace(' ', '_')).lower()
+        return sanitized if sanitized else "unknown"
+
+    def _get_descriptive_key_for_json(self, user_id: int, display_name: str) -> str:
+        """Генерирует описательный ключ для JSON, включающий user_id и санитизированное имя."""
+        sanitized_display_name = self._get_sanitized_name(display_name)
+        return f"{user_id}_{sanitized_display_name}"
+
     def _load_config(self):
         """Загружает текущие активные файлы для пользователей из конфига."""
+        from database import get_user_display_name # Import here to avoid circular dependencies on module level
         try:
             with open(self.config_file_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
                 if 'user_current_files' in config and isinstance(config['user_current_files'], dict):
-                    self.user_current_files = {int(k): v for k, v in config['user_current_files'].items()}
+                    temp_user_files: Dict[int, Dict[str, str]] = {} # type: ignore
+                    for key_str, filename in config['user_current_files'].items():
+                        try:
+                            user_id_int = int(key_str) # Attempt to parse as old format (int user ID)
+                            
+                            # Old format key found, try to fetch display name
+                            fetched_display_name = "Unknown User" # Default
+                            try:
+                                # This block attempts to run async code in a sync context.
+                                # It's a hack for migration and should be used with caution.
+                                # It tries to get the current event loop, or creates a new one.
+                                loop = asyncio.get_event_loop()
+                                if not loop.is_running(): # Only run if no loop is active
+                                    fetched_display_name_raw = loop.run_until_complete(get_user_display_name(user_id_int))
+                                    if fetched_display_name_raw:
+                                        fetched_display_name = fetched_display_name_raw
+                            except RuntimeError: # "There is no current event loop" or "Event loop is running"
+                                pass # Fallback to "Unknown User"
+                            except Exception as e:
+                                logger.error(f"[_load_config] Error fetching display name for user {user_id_int}: {e}")
+                                pass # Fallback to "Unknown User"
+
+                            temp_user_files[user_id_int] = {"filename": filename, "display_name": fetched_display_name}
+                            logger.info(f"[_load_config] Migrated old config key for user {user_id_int} to new format with filename {filename} and display name {fetched_display_name}.")
+
+                        except ValueError: # New format key (user_id_display_name)
+                            parts = key_str.split('_', 1) # Split only on first underscore
+                            if parts and parts[0].isdigit():
+                                user_id_int = int(parts[0])
+                                # Extract display name from the key, removing user_id_ prefix
+                                display_name_from_key = parts[1].replace('_', ' ') if len(parts) > 1 else "Unknown User"
+                                temp_user_files[user_id_int] = {"filename": filename, "display_name": display_name_from_key}
+                            else:
+                                logger.warning(f"[_load_config] Invalid key format in config file: {key_str}. Skipping.")
+
+                    self.user_current_files = temp_user_files
                     logger.info(f"[_load_config] Loaded user_current_files: {self.user_current_files}")
                 else:
                     logger.warning(f"[_load_config] 'user_current_files' key not found or invalid in {self.config_file_path}. Initializing empty.")
@@ -40,14 +99,19 @@ class WordManager:
         except json.JSONDecodeError as e:
             logger.error(f"[_load_config] Error decoding JSON from {self.config_file_path}: {e}")
             self.user_current_files = {}
-    
+
     def _save_config(self):
         """Сохраняет текущие активные файлы для пользователей в конфиг."""
         try:
             with open(self.config_file_path, 'w', encoding='utf-8') as f:
-                # Преобразуем ключи user_id в str для сохранения в JSON
-                json.dump({'user_current_files': {str(k): v for k, v in self.user_current_files.items()}}, f, ensure_ascii=False, indent=4)
-            logger.info(f"[_save_config] Saved user_current_files: {self.user_current_files}") # Added logging
+                saved_files: Dict[str, str] = {} # type: ignore
+                for user_id, user_data in self.user_current_files.items():
+                    # Generate descriptive key for JSON based on current user_id and stored display_name
+                    descriptive_key = self._get_descriptive_key_for_json(user_id, user_data.get("display_name", "Unknown User"))
+                    saved_files[descriptive_key] = user_data["filename"]
+
+                json.dump({'user_current_files': saved_files}, f, ensure_ascii=False, indent=4)
+            logger.info(f"[_save_config] Saved user_current_files: {saved_files}") # Log saved_files, not self.user_current_files
         except Exception as e:
             logger.error(f"[_save_config] Error saving configuration {self.config_file_path}: {e}")
     
@@ -56,30 +120,32 @@ class WordManager:
         if not os.path.exists(self.data_dir):
             return []
         
-        word_files = []
-        for file in os.listdir(self.data_dir):
-            if file.endswith('.json') and file not in ['stats.json', 'config.json']:
-                word_files.append(file)
+        words_dir = os.path.join(self.data_dir, "words")
+        if not os.path.exists(words_dir):
+            return []
+        
+        word_files = [file for file in os.listdir(words_dir) if file.endswith('.json')]
         return sorted(word_files)
     
     def get_user_current_file(self, user_id: int) -> str:
         """Возвращает имя текущего файла для конкретного пользователя."""
-        filename = self.user_current_files.get(user_id, "words.json") # По умолчанию "words.json"
-        logger.info(f"[get_user_current_file] For user {user_id}, returning filename: {filename}") # Added logging
+        user_data = self.user_current_files.get(user_id)
+        filename = user_data['filename'] if user_data else "words.json"
+        logger.info(f"[get_user_current_file] For user {user_id}, returning filename: {filename}")
         return filename
     
-    def set_user_current_file(self, user_id: int, filename: str) -> bool:
-        """Устанавливает текущий файл слов для конкретного пользователя."""
+    def set_user_current_file(self, user_id: int, filename: str, user_display_name: str) -> bool:
+        """Устанавливает текущий файл слов для конкретного пользователя, обновляя его display_name."""
         if not filename.endswith('.json'):
             filename += '.json'
         
-        file_path = os.path.join(self.data_dir, filename)
+        file_path = os.path.join(self.data_dir, "words", filename)
         if os.path.exists(file_path):
-            self.user_current_files[user_id] = filename
+            self.user_current_files[user_id] = {"filename": filename, "display_name": user_display_name}
             self._save_config() # Сохраняем изменение в конфиг
-            logger.info(f"[set_user_current_file] User {user_id} set current file to: {filename}")
+            logger.info(f"[set_user_current_file] User {user_id} ({user_display_name}) set current file to: {filename}")
             return True
-        logger.warning(f"[set_user_current_file] File not found, cannot set current file for user {user_id}: {filename}")
+        logger.warning(f"[set_user_current_file] File not found, cannot set current file for user {user_id} ({user_display_name}): {filename}")
         return False
     
     def get_current_file_path(self, user_id: int = None) -> str:
@@ -88,7 +154,7 @@ class WordManager:
             filename = self.get_user_current_file(user_id)
         else:
             filename = "words.json" # Дефолтный файл для обратной совместимости или общих операций
-        file_path = os.path.join(self.data_dir, filename)
+        file_path = os.path.join(self.data_dir, "words", filename)
         logger.debug(f"[get_current_file_path] For user {user_id if user_id else 'None'}, file path: {file_path}")
         return file_path
     
@@ -128,14 +194,14 @@ class WordManager:
     
     def add_word_to_file(self, filename: str, word_pair: Dict[str, str]) -> bool:
         """Добавляет слово в указанный файл."""
-        file_path = os.path.join(self.data_dir, filename)
+        file_path = os.path.join(self.data_dir, "words", filename)
         words = self.load_words_from_file(file_path)
         words.append(word_pair)
         return self.save_words_to_file(words, file_path)
     
     def delete_word_from_file(self, filename: str, en_word: str) -> bool:
         """Удаляет слово из указанного файла."""
-        file_path = os.path.join(self.data_dir, filename)
+        file_path = os.path.join(self.data_dir, "words", filename)
         words = self.load_words_from_file(file_path)
         initial_len = len(words)
         words = [word for word in words if word['en'].lower() != en_word.lower()]
@@ -178,11 +244,11 @@ class WordManager:
         # Полное динамическое имя файла до .json
         full_dynamic_name_base = f"{base_filename}{dynamic_suffix}"
         
-        # Обрезаем до 11 символов, если необходимо
-        final_filename_base = full_dynamic_name_base[:11].lower()
+        # Обрезаем до 12 с символов, если необходимо
+        final_filename_base = full_dynamic_name_base[:12].lower()
         final_filename = f"{final_filename_base}.json"
 
-        file_path = os.path.join(self.data_dir, final_filename)
+        file_path = os.path.join(self.data_dir, "words", final_filename)
         
         if os.path.exists(file_path):
             logger.warning(f"[create_new_file] File already exists, cannot create: {final_filename}")
@@ -192,7 +258,7 @@ class WordManager:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(words or [], f, ensure_ascii=False, indent=4)
             logger.info(f"[create_new_file] Successfully created new file: {final_filename}")
-            self.set_user_current_file(user_id, final_filename) # Устанавливаем новый файл как текущий
+            self.set_user_current_file(user_id, final_filename, user_display_name) # Устанавливаем новый файл как текущий
             return final_filename
         except Exception as e:
             logger.error(f"[create_new_file] Error creating file {final_filename}: {e}")
@@ -203,14 +269,14 @@ class WordManager:
         if not filename.endswith('.json'):
             filename += '.json'
         
-        file_path = os.path.join(self.data_dir, filename)
+        file_path = os.path.join(self.data_dir, "words", filename)
         if not os.path.exists(file_path) or filename == "words.json":
             return False  # Нельзя удалить основной файл
         
         try:
             os.remove(file_path)
             # Удаляем файл из user_current_files, если он был выбран
-            users_to_reset = [user_id for user_id, f in self.user_current_files.items() if f == filename]
+            users_to_reset = [user_id for user_id, user_data in self.user_current_files.items() if user_data['filename'] == filename]
             for user_id in users_to_reset:
                 del self.user_current_files[user_id]
             self._save_config() # Сохраняем изменения в конфиг
@@ -219,12 +285,12 @@ class WordManager:
             print(f"Ошибка удаления файла {file_path}: {e}")
             return False
     
-    def get_file_info(self, filename: str) -> Optional[Dict[str, any]]:
+    def get_file_info(self, filename: str) -> Optional[Dict[str, Any]]:
         """Возвращает информацию о файле (количество слов, размер и т.д.)."""
         if not filename.endswith('.json'):
             filename += '.json'
         
-        file_path = os.path.join(self.data_dir, filename)
+        file_path = os.path.join(self.data_dir, "words", filename)
         if not os.path.exists(file_path):
             return None
         
@@ -246,7 +312,7 @@ class WordManager:
     def remove_duplicates_from_file(self, filename: str) -> int:
         """Удаляет дубликаты слов из указанного файла, основываясь на английском слове.
         Возвращает количество удаленных дубликатов."""
-        file_path = os.path.join(self.data_dir, filename)
+        file_path = os.path.join(self.data_dir, "words", filename)
         words = self.load_words_from_file(file_path)
 
         seen_en_words = set()
