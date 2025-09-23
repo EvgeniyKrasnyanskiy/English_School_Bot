@@ -130,7 +130,7 @@ class WordManager:
     def get_user_current_file(self, user_id: int) -> str:
         """Возвращает имя текущего файла для конкретного пользователя."""
         user_data = self.user_current_files.get(user_id)
-        filename = user_data['filename'] if user_data else "words.json"
+        filename = user_data['filename'] if user_data else "all_words.json"
         logger.info(f"[get_user_current_file] For user {user_id}, returning filename: {filename}")
         return filename
     
@@ -149,11 +149,11 @@ class WordManager:
         return False
     
     def get_current_file_path(self, user_id: int = None) -> str:
-        """Возвращает полный путь к текущему файлу. Если user_id не указан, использует общий 'words.json'."""
+        """Возвращает полный путь к текущему файлу. Если user_id не указан, использует общий 'all_words.json'."""
         if user_id is not None:
             filename = self.get_user_current_file(user_id)
         else:
-            filename = "words.json" # Дефолтный файл для обратной совместимости или общих операций
+            filename = "all_words.json" # Дефолтный файл для обратной совместимости или общих операций
         file_path = os.path.join(self.data_dir, "words", filename)
         logger.debug(f"[get_current_file_path] For user {user_id if user_id else 'None'}, file path: {file_path}")
         return file_path
@@ -270,7 +270,7 @@ class WordManager:
             filename += '.json'
         
         file_path = os.path.join(self.data_dir, "words", filename)
-        if not os.path.exists(file_path) or filename == "words.json":
+        if not os.path.exists(file_path) or filename == "all_words.json":
             return False  # Нельзя удалить основной файл
         
         try:
@@ -308,7 +308,7 @@ class WordManager:
         except Exception as e:
             logger.error(f"[get_file_info] Error getting file info for {file_path}: {e}")
             return None
-    
+
     def remove_duplicates_from_file(self, filename: str) -> int:
         """Удаляет дубликаты слов из указанного файла, основываясь на английском слове.
         Возвращает количество удаленных дубликатов."""

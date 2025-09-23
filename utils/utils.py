@@ -25,17 +25,17 @@ def get_quiz_options(correct_word_ru: str, all_words: list, num_options: int = 4
     random.shuffle(options)
     return options
 
-async def add_word(new_word: dict, filename: str = "words.json") -> bool:
+async def add_word(new_word: dict, filename: str = "all_words.json") -> bool:
     """Adds a new word to the specified file."""
     return word_manager.add_word_to_file(filename, new_word)
 
-async def get_words_alphabetical(filename: str = "words.json") -> list[dict]:
+async def get_words_alphabetical(filename: str = "all_words.json") -> list[dict]:
     """Loads words from the specified file and returns them sorted alphabetically by English word."""
     # Since filename is passed, we construct the full path using word_manager's data_dir and words subdirectory
     file_path = os.path.join(word_manager.data_dir, "words", filename)
     words = word_manager.load_words_from_file(file_path)
     return sorted(words, key=lambda x: x['en'].lower())
 
-async def delete_word(word_to_delete_en: str, filename: str = "words.json") -> bool:
+async def delete_word(word_to_delete_en: str, filename: str = "all_words.json") -> bool:
     """Deletes a word from the specified file by its English representation."""
     return word_manager.delete_word_from_file(filename, word_to_delete_en)

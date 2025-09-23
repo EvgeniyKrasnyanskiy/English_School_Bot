@@ -151,7 +151,6 @@ async def cancel_create_word_set(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
     await callback.message.edit_text("Создание набора слов отменено.", reply_markup=None)
-    await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
 
 
 # Удаляем старый обработчик для команды /my_list, так как его функционал теперь в /my_set
@@ -203,7 +202,7 @@ async def add_my_word_command(callback: CallbackQuery, state: FSMContext):
     logger.debug(f"[add_my_word_command] User ID: {user_id}, Current User File: {current_user_file}")
     logger.debug(f"[add_my_word_command] Checking file existence for path: {current_file_path}, Exists: {os.path.exists(current_file_path)}")
 
-    if not os.path.exists(current_file_path) or current_user_file == "words.json":
+    if not os.path.exists(current_file_path) or current_user_file == "all_words.json":
         await callback.message.edit_text(
             "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала."
         )
@@ -235,7 +234,7 @@ async def process_add_my_word(message: Message, state: FSMContext):
     logger.debug(f"[process_add_my_word] User ID: {user_id}, Current User File: {current_user_file}")
     logger.debug(f"[process_add_my_word] Checking file existence for path: {current_file_path}, Exists: {os.path.exists(current_file_path)}")
 
-    if not os.path.exists(current_file_path) or current_user_file == "words.json":
+    if not os.path.exists(current_file_path) or current_user_file == "all_words.json":
         await message.answer(
             "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала.",
             reply_markup=main_menu_keyboard
@@ -313,7 +312,7 @@ async def del_my_word_command(callback: CallbackQuery, state: FSMContext):
     logger.debug(f"[del_my_word_command] User ID: {user_id}, Current User File: {current_user_file}")
     logger.debug(f"[del_my_word_command] Checking file existence for path: {current_file_path}, Exists: {os.path.exists(current_file_path)}")
 
-    if not os.path.exists(current_file_path) or current_user_file == "words.json":
+    if not os.path.exists(current_file_path) or current_user_file == "all_words.json":
         await callback.message.edit_text(
             "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала.",
             reply_markup=main_menu_keyboard
@@ -340,7 +339,7 @@ async def process_del_my_word(message: Message, state: FSMContext):
     logger.debug(f"[process_del_my_word] User ID: {user_id}, Current User File: {current_user_file}")
     logger.debug(f"[process_del_my_word] Checking file existence for path: {current_file_path}, Exists: {os.path.exists(current_file_path)}")
 
-    if not os.path.exists(current_file_path) or current_user_file == "words.json":
+    if not os.path.exists(current_file_path) or current_user_file == "all_words.json":
         await message.answer(
             "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала.",
             reply_markup=main_menu_keyboard
@@ -426,7 +425,6 @@ async def back_to_main_from_my_set_select_file_callback(callback: CallbackQuery,
     await callback.answer()
     await state.clear()
     await callback.message.edit_text("Возвращаемся в главное меню.", reply_markup=None)
-    await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
 
 
 @router.message(Command("list"))
@@ -538,7 +536,7 @@ async def delete_my_word_set_command(callback: CallbackQuery, state: FSMContext)
     user_id = callback.from_user.id
     current_user_file = word_manager.get_user_current_file(user_id)
 
-    if current_user_file == "words.json":
+    if current_user_file == "all_words.json":
         await callback.message.edit_text(
             "Вы не можете удалить основной набор слов.",
             reply_markup=get_my_set_keyboard(is_personal_set=False)
@@ -564,7 +562,7 @@ async def confirm_delete_my_word_set(callback: CallbackQuery, state: FSMContext)
     user_id = callback.from_user.id
     current_user_file = word_manager.get_user_current_file(user_id)
 
-    if current_user_file == "words.json":
+    if current_user_file == "all_words.json":
         await callback.message.edit_text(
             "Невозможно удалить основной набор слов.",
             reply_markup=get_my_set_keyboard(is_personal_set=False)
@@ -574,12 +572,11 @@ async def confirm_delete_my_word_set(callback: CallbackQuery, state: FSMContext)
 
     if word_manager.delete_file(current_user_file):
         # Сбрасываем текущий файл пользователя на дефолтный
-        word_manager.set_user_current_file(user_id, "words.json", user_display_name) # Pass user_display_name
+        word_manager.set_user_current_file(user_id, "all_words.json", user_display_name) # Pass user_display_name
         await callback.message.edit_text(
             f"✅ Ваш личный набор слов <b>{html.escape(current_user_file)}</b> успешно удален.",
             parse_mode="HTML"
         )
-        await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
     else:
         await callback.message.edit_text(
             f"❌ Не удалось удалить набор слов <b>{html.escape(current_user_file)}</b>. Возможно, файл не существует или произошла ошибка.",
@@ -594,7 +591,6 @@ async def cancel_delete_my_word_set(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
     await callback.message.edit_text("Удаление набора слов отменено.", reply_markup=None)
-    await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
 
 
 @router.callback_query(F.data == "cancel_add_del_word", StateFilter(UserWordStates.waiting_for_add_word, UserWordStates.waiting_for_del_word))

@@ -76,7 +76,7 @@ async def send_guess_word_question(message: Message, state: FSMContext):
         current_audio_ids.append(sent_audio.message_id)
         await state.update_data(guess_sent_audio_ids=current_audio_ids)
     else:
-        await message.answer("Извините, для этого слова аудиофайл не найден. Пожалуйста, выберите другую игру или свяжитесь с администратором для обновления файлов со словами для обучения.",
+        await message.answer("Извините, для этого слова аудиофайл не найден. Пожалуйста, выберите другую игру. Вы также можете поучавствовать в наполнении базы озвученных слов, используя команду /new_sound. Слово будет добавлено сразу после проверки администратором (~24 часа).",
                              reply_markup=main_menu_keyboard)
         await state.clear()
         return # Прекращаем выполнение функции, так как аудиофайла нет

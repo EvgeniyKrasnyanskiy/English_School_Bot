@@ -50,6 +50,7 @@ CONFIGURABLE_SETTINGS = {
     "ADMIN_IDS": {"type": list, "description": "Список ID администраторов"},
     "RECALL_TYPING_COUNTDOWN_SECONDS": {"type": float, "description": "Время на ввод в игре 'Ввод по памяти'"},
     "MAX_USER_WORDS": {"type": int, "description": "Максимальное количество слов в пользовательском наборе"},
+    "CHECK_TEMP_AUDIO": {"type": bool, "description": "Проверять наличие новых аудио в папке temp_audio"},
 }
 
 @router.message(Command("add"))
@@ -61,7 +62,7 @@ async def add_new_word(message: Message):
     # /add [файл_слов] английское_слово=русский_перевод
     parts = message.text.split(maxsplit=2)
     
-    target_filename = "words.json"
+    target_filename = "all_words.json"
     word_pair_str_index = 1
 
     if len(parts) > 1 and parts[1].endswith(".json"):
@@ -93,35 +94,6 @@ async def add_new_word(message: Message):
     else:
         await message.reply(f"Не удалось добавить слово '{en_word}={ru_word}' в файл '{target_filename}'.")
 
-@router.message(Command("admin_list"))
-async def list_words(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("У вас нет прав для выполнения этой команды.")
-        return
-
-    # /list [файл_слов.json]
-    parts = message.text.split(maxsplit=1)
-    
-    target_filename = word_manager.get_user_current_file(message.from_user.id) # По умолчанию - текущий файл админа
-
-    if len(parts) > 1:
-        potential_filename = parts[1].strip()
-        if potential_filename.endswith(".json"):
-            target_filename = potential_filename
-        else:
-            await message.reply("Неверный формат команды. Используйте: `/list [имя_файла.json]` или `/list` для просмотра текущего файла.", parse_mode="Markdown")
-            return
-    
-    words = await get_words_alphabetical(filename=target_filename)
-    if not words:
-        await message.reply(f"Словарь файла `{target_filename}` пуст или файл не найден.", parse_mode="Markdown")
-        return
-
-    word_list_text = f"*Слова в файле {target_filename} (по алфавиту):*\n"
-    for word in words:
-        word_list_text += f"  • {word['en']} = {word['ru']}\n"
-    await message.reply(word_list_text, parse_mode="Markdown")
-
 @router.message(Command("del"))
 async def del_word(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -131,7 +103,7 @@ async def del_word(message: Message):
     # /del [файл_слов.json] английское_слово
     parts = message.text.split(maxsplit=2)
     
-    target_filename = "words.json"
+    target_filename = "all_words.json"
     word_to_delete_index = 1
 
     if len(parts) > 1 and parts[1].endswith(".json"):
@@ -381,8 +353,8 @@ async def delete_word_file(message: Message):
         return
 
     filename = args[1].strip()
-    if filename == "words.json":
-        await message.reply("❌ Нельзя удалить основной файл 'words.json'.")
+    if filename == "all_words.json":
+        await message.reply("❌ Нельзя удалить основной файл 'all_words.json'.")
         return
 
     if word_manager.delete_file(filename):
@@ -396,24 +368,52 @@ async def deduplicate_words_command(message: Message):
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
     
+    # /deduplicate_words [имя_файла.json] или /deduplicate_words all
     parts = message.text.split(maxsplit=1)
-    target_filename = "words.json"
+    target = "default"
 
     if len(parts) > 1:
-        potential_filename = parts[1].strip()
-        if potential_filename.endswith(".json"):
-            target_filename = potential_filename
+        target = parts[1].strip().lower()
+
+    total_duplicates_removed = 0
+    if target == "all" or target == "default": # Изменено здесь
+        await message.reply("Начинаю удаление дубликатов из ВСЕХ файлов со словами... Это может занять некоторое время.")
+        files = word_manager.get_available_files()
+        if not files:
+            await message.reply("Файлы со словами не найдены.")
+            return
+        
+        for filename in files:
+            duplicates_removed = word_manager.remove_duplicates_from_file(filename)
+            if duplicates_removed > 0:
+                total_duplicates_removed += duplicates_removed
+                await message.reply(f"✅ Удалено {duplicates_removed} дубликатов из файла `{filename}`.", parse_mode="Markdown")
+            else:
+                await message.reply(f"ℹ️ В файле `{filename}` дубликатов не найдено.", parse_mode="Markdown")
+            await asyncio.sleep(0.1) # Небольшая задержка, чтобы не перегружать API Telegram
+        
+        if total_duplicates_removed > 0:
+            await message.reply(f"✅ Завершено: Всего удалено {total_duplicates_removed} дубликатов из всех файлов.", parse_mode="Markdown")
         else:
-            await message.reply("Неверный формат команды. Используйте: `/deduplicate_words [имя_файла.json]` или `/deduplicate_words` для обработки файла по умолчанию.", parse_mode="Markdown")
+            await message.reply(f"ℹ️ Завершено: Дубликатов не найдено ни в одном файле.", parse_mode="Markdown")
+
+    elif target.endswith(".json"):
+        filename_to_process = target # Теперь target уже является именем файла
+        
+        if not word_manager.get_file_info(filename_to_process):
+            await message.reply(f"❌ Файл `{filename_to_process}` не найден. Используйте /files для просмотра доступных файлов.", parse_mode="Markdown")
             return
 
-    await message.reply(f"Начинаю удаление дубликатов из файла `{target_filename}`...")
-    duplicates_removed = word_manager.remove_duplicates_from_file(target_filename)
+        await message.reply(f"Начинаю удаление дубликатов из файла `{filename_to_process}`...")
+        duplicates_removed = word_manager.remove_duplicates_from_file(filename_to_process)
 
-    if duplicates_removed > 0:
-        await message.reply(f"✅ Удалено {duplicates_removed} дубликатов из файла `{target_filename}`.", parse_mode="Markdown")
+        if duplicates_removed > 0:
+            await message.reply(f"✅ Удалено {duplicates_removed} дубликатов из файла `{filename_to_process}`.", parse_mode="Markdown")
+        else:
+            await message.reply(f"ℹ️ В файле `{filename_to_process}` дубликатов не найдено.", parse_mode="Markdown")
     else:
-        await message.reply(f"ℹ️ В файле `{target_filename}` дубликатов не найдено.", parse_mode="Markdown")
+        await message.reply("Неверный формат команды. Используйте: `/deduplicate_words [имя_файла.json]` для обработки конкретного файла, `/deduplicate_words all` для обработки всех файлов или `/deduplicate_words` для обработки файла по умолчанию.", parse_mode="Markdown")
+
 
 @router.message(Command("current_files"))
 async def show_all_users_current_files(message: Message):
@@ -543,7 +543,7 @@ async def process_ban_user_id(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
 
-@router.message(Command("send"))
+@router.message(Command("send_msg"))
 async def send_message_command(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
@@ -551,7 +551,7 @@ async def send_message_command(message: Message, state: FSMContext):
 
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.reply("Пожалуйста, используйте формат: `/send [текст]` или `/send class=2в [текст]`", parse_mode="Markdown")
+        await message.reply("Пожалуйста, используйте формат: `/send_msg [текст]` или `/send_msg class=2в [текст]`", parse_mode="Markdown")
         return
 
     target_class = None
@@ -635,19 +635,21 @@ async def cancel_send_message(message: Message, state: FSMContext):
 
 @router.message(Command("new_sound"))
 async def add_new_audio_command(message: Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("У вас нет прав для выполнения этой команды.")
-        return
+    # Удаляем проверку на ADMIN_IDS, делая команду общедоступной
+    # if message.from_user.id not in ADMIN_IDS:
+    #     await message.reply("У вас нет прав для выполнения этой команды.")
+    #     return
 
-    await message.reply("Пожалуйста, отправьте голосовое сообщение (аудиофайл), которое вы хотите добавить.", reply_markup=cancel_keyboard)
+    await message.reply("Пожалуйста, отправьте сначала голосовое сообщение (озвученное слово или выражение), которое вы хотите добавить. Затем бот поросит вас ввести имя файла для этого аудиофайла которое должно быть на английском языке и точно совпадать с озвученным словом или выражением.", reply_markup=cancel_keyboard)
     await state.set_state(AdminStates.waiting_for_voice)
 
 @router.message(AdminStates.waiting_for_voice, F.voice)
 async def process_voice_for_new_audio(message: Message, state: FSMContext, bot: Bot):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("У вас нет прав для выполнения этой команды.")
-        await state.clear()
-        return
+    # Удаляем проверку на ADMIN_IDS
+    # if message.from_user.id not in ADMIN_IDS:
+    #     await message.reply("У вас нет прав для выполнения этой команды.")
+    #     await state.clear()
+    #     return
 
     # Создаем папку data/temp_audio если ее нет
     temp_audio_dir = os.path.join("data", "temp_audio")
@@ -663,19 +665,20 @@ async def process_voice_for_new_audio(message: Message, state: FSMContext, bot: 
     await bot.download_file(file.file_path, temp_ogg_filepath)
 
     await state.update_data(temp_ogg_filepath=temp_ogg_filepath)
-    await message.reply("Голосовое сообщение получено. Как вы хотите назвать этот аудиофайл (без расширения)?", reply_markup=cancel_keyboard_for_filename)
+    await message.reply("Голосовое сообщение получено. Как вы хотите назвать этот аудиофайл (без расширения)?\n\n*Имя файла должно быть только на английском языке!*", parse_mode="Markdown", reply_markup=cancel_keyboard_for_filename)
     await state.set_state(AdminStates.waiting_for_audio_filename)
 
 @router.message(AdminStates.waiting_for_audio_filename, F.text)
 async def process_audio_filename(message: Message, state: FSMContext, bot: Bot):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("У вас нет прав для выполнения этой команды.")
-        await state.clear()
-        return
+    # Удаляем проверку на ADMIN_IDS
+    # if message.from_user.id not in ADMIN_IDS:
+    #     await message.reply("У вас нет прав для выполнения этой команды.")
+    #     await state.clear()
+    #     return
 
     filename = message.text.strip().lower()
     if not filename:
-        await message.reply("Имя файла не может быть пустым. Пожалуйста, введите имя файла или /cancel для отмены.")
+        await message.reply("Имя файла не может быть пустым. Пожалуйста, введите имя файла *на английском языке* или /cancel для отмены.", parse_mode="Markdown")
         return
 
     state_data = await state.get_data()
@@ -707,17 +710,23 @@ async def process_audio_filename(message: Message, state: FSMContext, bot: Bot):
 
     try:
         os.replace(temp_ogg_filepath, final_ogg_filepath)
-        await message.reply(f"Файл '{final_ogg_filename}' успешно сохранен. Запускаю конвертацию... ")
+        
+        if message.from_user.id in ADMIN_IDS: # Admin receives detailed messages
+            await message.reply(f"Файл '{final_ogg_filename}' успешно сохранен. Запускаю конвертацию... ")
 
-        # Запускаем процесс конвертации
-        log_messages, conversion_successful = await convert_ogg_to_mp3() # Используем существующую функцию
-        for log_msg in log_messages:
-            await message.reply(log_msg)
+            # Запускаем процесс конвертации
+            log_messages, conversion_successful = await convert_ogg_to_mp3() # Используем существующую функцию
+            for log_msg in log_messages:
+                await message.reply(log_msg)
 
-        if conversion_successful:
-            await message.reply("Процесс добавления и конвертации аудиофайла завершен!")
-        else:
-            await message.reply("Добавлено успешно, но конвертация не удалась. Конвертируйте самостоятельно или настройте конвертер.")
+            if conversion_successful:
+                await message.reply("Процесс добавления и конвертации аудиофайла завершен!")
+            else:
+                await message.reply("Добавлено успешно, но конвертация не удалась. Конвертируйте самостоятельно или настройте конвертер.")
+        else: # Non-admin user receives simplified message
+            await message.reply("✅ Спасибо! Ваш аудиофайл получен и ожидает одобрения администратора.")
+
+        await state.clear()
 
     except Exception as e:
         await message.reply(f"Произошла ошибка при сохранении или конвертации файла: {e}")
@@ -753,7 +762,6 @@ async def cancel_audio_upload_handler(callback: CallbackQuery, state: FSMContext
     await state.clear()
     await callback.answer("Операция отменена.", show_alert=True)
     await callback.message.edit_text("Операция отменена.", reply_markup=None)
-    await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
 
 @router.message(Command("settings"))
 async def show_settings(message: Message, state: FSMContext):
@@ -873,8 +881,10 @@ async def process_new_setting_value(message: Message, state: FSMContext):
                 new_value = [item.strip() for item in new_value_str[1:-1].split(',')]
             else:
                 new_value = [item.strip() for item in new_value_str.split(',')]
+        elif expected_type == bool: # Handle boolean type
+            new_value = new_value_str.lower() == "true"
         else:
-            new_value = new_value_str.strip('""') # Treat as string
+            new_value = new_value_str.strip('"') # Treat as string
         
         # Now, update the config.py file
         await update_config_file(selected_setting, new_value)
@@ -925,6 +935,8 @@ async def update_config_file(setting_name: str, new_value: any):
                 value_to_write = f'"{new_value}"'
             elif isinstance(new_value, list):
                 value_to_write = json.dumps(new_value, ensure_ascii=False)
+            elif isinstance(new_value, bool):
+                value_to_write = str(new_value) # Ensures True/False are written as Python bools
             else:
                 value_to_write = str(new_value)
             
@@ -939,6 +951,8 @@ async def update_config_file(setting_name: str, new_value: any):
             value_to_write = f'"{new_value}"'
         elif isinstance(new_value, list):
             value_to_write = json.dumps(new_value, ensure_ascii=False)
+        elif isinstance(new_value, bool):
+            value_to_write = str(new_value)
         else:
             value_to_write = str(new_value)
         new_file_content_lines.append(f"{setting_name} = {value_to_write}\n")
@@ -967,7 +981,6 @@ async def cancel_settings_operation(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer("Операция отменена.", show_alert=True)
     await callback.message.edit_text("Операция отменена.", reply_markup=None)
-    await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
 
 @router.message(Command("unban"))
 async def unban_user_command(message: Message, state: FSMContext):

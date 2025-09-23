@@ -62,7 +62,7 @@ async def main():
         await message.answer("Вы уже в главном меню.")
 
     # Запускаем фоновые задачи
-    await start_background_tasks()
+    await start_background_tasks(bot)
 
     await dp.start_polling(bot)
 
