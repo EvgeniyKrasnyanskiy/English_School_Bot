@@ -136,4 +136,4 @@ async def back_to_main_from_learn(message: Message, state: FSMContext, bot: Bot)
 
 @router.message(F.text == "🔁 Сменить набор")
 async def switch_set_via_button(message: Message, state: FSMContext):
-    await _send_file_selection_menu_helper(message, state) # Вызываем новую функцию для смены набора
+    await _send_file_selection_menu_helper(message, state, message.from_user.id) # Вызываем новую функцию для смены набора и передаем user_id

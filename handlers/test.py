@@ -60,7 +60,8 @@ async def start_test(message: Message, state: FSMContext, bot: Bot):
     )
     
     await message.answer("Результаты вашего теста будут отображаться в статистике только после его завершения!")
-    await message.answer(f"Начинаем тест! Ответьте на {num_questions} вопросов.")
+    current_word_set_name = word_manager.get_user_current_file(int(user_id))
+    await message.answer(f"Начинаем тест! Ответьте на {num_questions} вопросов из набора '{current_word_set_name}' в котором {len(words)} слов.")
     await send_test_question(message, state)
 
 async def send_test_question(message: Message, state: FSMContext):

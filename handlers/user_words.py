@@ -11,9 +11,11 @@ from typing import Dict, List
 import html
 import os
 import logging
-from config import MAX_USER_WORDS # Импортируем MAX_USER_WORDS из config.py
+from config import MAX_USER_WORDS, TELEGRAM_MAX_MESSAGE_LENGTH # Импортируем MAX_USER_WORDS и TELEGRAM_MAX_MESSAGE_LENGTH из config.py
 from utils.data_manager import get_banned_users, get_image_filepath, get_audio_filepath
 from aiogram.exceptions import TelegramBadRequest
+import asyncio
+from aiogram import Bot # Import Bot for accessing bot methods
 
 logger = logging.getLogger(__name__)
 
@@ -445,7 +447,7 @@ async def back_to_main_from_my_set_select_file_callback(callback: CallbackQuery,
 async def switch_my_set_inline_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     # Передаем callback.message в качестве объекта сообщения
-    await _send_file_selection_menu_helper(callback.message, state)
+    await _send_file_selection_menu_helper(callback.message, state, callback.from_user.id)
 
 
 # @router.message(Command("list")) # Обновленный обработчик команды /list
@@ -493,7 +495,7 @@ async def switch_my_set_inline_callback(callback: CallbackQuery, state: FSMConte
 
 
 @router.callback_query(F.data == "toggle_my_word_list") # Измененный callback_data
-async def toggle_my_word_list_callback(callback: CallbackQuery, state: FSMContext):
+async def toggle_my_word_list_callback(callback: CallbackQuery, state: FSMContext, bot: Bot): # Pass bot instance
     if callback.from_user.id in await get_banned_users():
         await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
         await state.clear()
@@ -507,26 +509,63 @@ async def toggle_my_word_list_callback(callback: CallbackQuery, state: FSMContex
     
     state_data = await state.get_data()
     word_list_visible = state_data.get("word_list_visible", False)
-    word_list_visible = not word_list_visible # Инвертируем состояние видимости
-    await state.update_data(word_list_visible=word_list_visible)
+    
+    # Get message IDs of previously sent list parts
+    previous_message_ids = state_data.get("word_list_message_ids", [])
 
-    logger.debug(f"[toggle_my_word_list_callback] User ID: {user_id}, Current File: {current_file}, User Display Name: {user_display_name}, Is Personal Set: {is_personal_set}, List Visible: {word_list_visible}")
-
-    message_prefix = f"📁 <b>{'Ваш личный набор слов:' if is_personal_set else 'Набор слов:'}</b> {html.escape(current_file)}\n"
+    # Define the core prefix that appears on every message part
+    core_message_prefix = f"📁 <b>{'Ваш личный набор слов:' if is_personal_set else 'Набор слов:'}</b> {html.escape(current_file)}\n"
     word_count_str = str(len(word_manager.load_words_from_file(os.path.join(word_manager.data_dir, 'words', current_file))))
     if is_personal_set:
         word_count_str += f" / {MAX_USER_WORDS}"
-    message_prefix += f"📊 Количество слов: {word_count_str}\n"
-    message_prefix += f"⚠️ Примечание: Для этих слов могут отсутствовать картинки и аудио.\n\n"
-    message_prefix += "\nВыберите действие:"
+    core_message_prefix += f"📊 Количество слов: {word_count_str}\n"
+    core_message_prefix += f"⚠️ Примечание: Для этих слов могут отсутствовать картинки и аудио.\n\n"
+
+    if word_list_visible: # If currently visible, hide it
+        logger.debug(f"[toggle_my_word_list_callback] Hiding list. Previous message IDs: {previous_message_ids}")
+        main_message_id = callback.message.message_id
+        
+        # Edit ALL messages in previous_message_ids to hide content and remove buttons initially
+        for msg_id in previous_message_ids:
+            try:
+                await bot.edit_message_text(
+                    chat_id=callback.message.chat.id,
+                    message_id=msg_id,
+                    text=core_message_prefix, # Only show the prefix when hidden
+                    parse_mode="HTML",
+                    reply_markup=None # Remove buttons
+                )
+                await asyncio.sleep(0.05)
+            except TelegramBadRequest as e:
+                logger.warning(f"[toggle_my_word_list_callback] Error hiding message {msg_id}: {e}")
+        
+        # Explicitly edit the main message (callback.message) with the "Show list" button
+        await bot.edit_message_text(
+            chat_id=callback.message.chat.id,
+            message_id=main_message_id,
+            text=core_message_prefix + "\nВыберите действие:", # Keep the action prompt for the main message
+            parse_mode="HTML",
+            reply_markup=get_my_set_keyboard(is_personal_set=is_personal_set, show_list_button_text="📖 Показать список слов")
+        )
+
+        # Update stored message IDs to contain only the main message ID
+        await state.update_data(word_list_visible=False, word_list_message_ids=[main_message_id])
+        logger.debug(f"[toggle_my_word_list_callback] List hidden. Updated message IDs: {[main_message_id]}")
+        return
+
+    # If currently hidden, show it
+    word_list_visible = True
+    await state.update_data(word_list_visible=word_list_visible)
+
+    logger.debug(f"[toggle_my_word_list_callback] Showing list. User ID: {user_id}, Current File: {current_file}, List Visible: {word_list_visible}")
 
     words = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, "words", current_file))
     words.sort(key=lambda x: x['en'].lower()) # Сортируем слова по английскому эквиваленту
 
-    show_list_button_text = "Скрыть список слов" if word_list_visible else "📖 Показать список слов"
+    show_list_button_text = "Скрыть список слов" 
 
     message_text_content = ""
-    if word_list_visible and words:
+    if words:
         message_text_content = f"<b>Список слов ({len(words)}):</b>\n"
         for word_pair in words:
             icons = []
@@ -536,34 +575,81 @@ async def toggle_my_word_list_callback(callback: CallbackQuery, state: FSMContex
                 icons.append(" 🖼️")
             icon_str = "".join(icons)
             message_text_content += f"  •<code>{html.escape(word_pair['en'])} = {html.escape(word_pair['ru'])}</code>{icon_str}\n"
-    elif not words:
+    else:
         message_text_content = f"{'Ваш личный набор слов' if is_personal_set else 'Набор слов'} <code>{html.escape(current_file)}</code> пуст. "
         if is_personal_set:
             message_text_content += 'Добавьте слова с помощью кнопки "➕ Добавить слово".'
         message_text_content += "\n"
-
-    final_message_text = message_prefix
-    if message_text_content:
-        final_message_text = final_message_text.replace("\n\nВыберите действие:", f"\n{message_text_content}\nВыберите действие:")
     
     try:
         markup_to_send = get_my_set_keyboard(is_personal_set=is_personal_set, show_list_button_text=show_list_button_text)
-        logger.debug(f"[toggle_my_word_list_callback] Sending markup: is_personal_set={is_personal_set}, markup={markup_to_send.inline_keyboard}")
+        logger.debug(f"[toggle_my_word_list_callback] Markup to send: {markup_to_send.inline_keyboard}")
 
-        await callback.message.edit_text(
-            final_message_text,
-            parse_mode="HTML",
-            reply_markup=markup_to_send
-        )
+        new_message_ids = []
+
+        ESTIMATED_HEADER_FOOTER_SIZE = len(core_message_prefix) + 200 
+        available_length = TELEGRAM_MAX_MESSAGE_LENGTH - ESTIMATED_HEADER_FOOTER_SIZE
+        
+        if len(message_text_content) > available_length:
+            chunks = []
+            current_chunk = ""
+            lines = message_text_content.splitlines(keepends=True)
+            for line in lines:
+                if len(current_chunk) + len(line) <= available_length:
+                    current_chunk += line
+                else:
+                    chunks.append(current_chunk)
+                    current_chunk = line
+            if current_chunk:
+                chunks.append(current_chunk)
+            
+            # Edit the original message (first part of the list) to display the prefix and the first chunk
+            edited_message = await callback.message.edit_text(
+                core_message_prefix + chunks[0],
+                parse_mode="HTML",
+                reply_markup=None # Buttons only on the last message
+            )
+            new_message_ids.append(edited_message.message_id)
+            logger.debug(f"[toggle_my_word_list_callback] Sent first chunk (edited): {edited_message.message_id}")
+
+            # Send subsequent chunks as new messages
+            for i, chunk in enumerate(chunks[1:]):
+                chunk_text = f"[Продолжение списка слов]\n{chunk}"
+                if i == len(chunks) - 2: # This is the last chunk
+                    chunk_text += "\nВыберите действие:"
+                    sent_message = await callback.message.answer(
+                        chunk_text,
+                        parse_mode="HTML",
+                        reply_markup=markup_to_send
+                    )
+                else:
+                    sent_message = await callback.message.answer(chunk_text, parse_mode="HTML")
+                new_message_ids.append(sent_message.message_id)
+                logger.debug(f"[toggle_my_word_list_callback] Sent chunk {i+2}: {sent_message.message_id}")
+                await asyncio.sleep(0.1) # Small delay to avoid API limits
+        else:
+            # If content is not too long, edit the original message with the full content
+            edited_message = await callback.message.edit_text(
+                core_message_prefix + message_text_content + "\nВыберите действие:",
+                parse_mode="HTML",
+                reply_markup=markup_to_send
+            )
+            new_message_ids.append(edited_message.message_id)
+            logger.debug(f"[toggle_my_word_list_callback] Sent single message (edited): {edited_message.message_id}")
+
+        # Store the new message IDs
+        await state.update_data(word_list_message_ids=new_message_ids)
+        logger.debug(f"[toggle_my_word_list_callback] All message IDs stored: {new_message_ids}")
+
     except TelegramBadRequest as e:
         logger.warning(f"[toggle_my_word_list_callback] TelegramBadRequest when editing message: {e}")
 
 
-async def _send_file_selection_menu_helper(message: Message, state: FSMContext):
-    user_id = message.from_user.id
+async def _send_file_selection_menu_helper(message: Message, state: FSMContext, user_id: int):
     user_display_name = await _get_user_display_name(user_id)
     available_files = word_manager.get_available_files()
     current_file = word_manager.get_user_current_file(user_id)
+    logger.info(f"[_send_file_selection_menu_helper] User {user_id} requested file selection menu. Current active file: {current_file}")
 
     if not available_files:
         await message.edit_text("Нет доступных файлов со словами для выбора.", reply_markup=main_menu_keyboard)
@@ -573,13 +659,13 @@ async def _send_file_selection_menu_helper(message: Message, state: FSMContext):
     keyboard = create_file_selection_keyboard(available_files, current_file)
     try:
         await message.edit_text(
-            "Выберите набор слов для изучения:",
+            "Выберите набор слов для изучения либо нажмите на уже выбранный набор для просмотра списка слов в нём:",
             reply_markup=keyboard
         )
     except TelegramBadRequest as e:
         logger.warning(f"[_send_file_selection_menu_helper] TelegramBadRequest when editing message: {e}")
         await message.answer(
-            "Выберите набор слов для изучения:",
+            "Выберите набор слов для изучения либо нажмите на уже выбранный набор для просмотра списка слов в нём:",
             reply_markup=keyboard
         )
 

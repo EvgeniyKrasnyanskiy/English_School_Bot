@@ -57,6 +57,7 @@ CONFIGURABLE_SETTINGS = {
     "RECALL_TYPING_COUNTDOWN_SECONDS": {"type": float, "description": "Время на ввод в игре 'Ввод по памяти'"},
     "MAX_USER_WORDS": {"type": int, "description": "Максимальное количество слов в пользовательском наборе"},
     "CHECK_NEW_AUDIO": {"type": bool, "description": "Проверять наличие новых аудио в папке /sounds/mp3 и уведомлять админа"},
+    "DEFAULT_WORD_SET": {"type": str, "description": "Набор слов по умолчанию при первом запуске или отсутствии активного"},
 }
 
 @router.message(Command("add"))
@@ -65,40 +66,65 @@ async def add_new_word(message: Message):
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
-    # /add [файл_слов] английское_слово=русский_перевод
-    parts = message.text.split(maxsplit=2)
+    command_and_args = message.text.split(maxsplit=1)
+    if len(command_and_args) < 2:
+        await message.reply(f"Пожалуйста, используйте формат: /add [имя_файла.json] английское_слово=русский_перевод")
+        return
+
+    args_string = command_and_args[1].strip()
+    logging.info(f"add_new_word: args_string = '{args_string}'")
+
+    target_filename = None
+    word_pair_str = None
+
+    # Pattern to capture an optional filename.json and the rest of the string as word_pair
+    # This regex handles cases like "food.json black coffee = черный кофе" or "black coffee = черный кофе"
+    match_with_file = re.match(r"^(?:(\S+\.json)\s+)?(.+)$", args_string)
+    logging.info(f"add_new_word: match_with_file = {match_with_file}")
+
+    if match_with_file:
+        potential_filename = match_with_file.group(1)
+        if potential_filename:
+            target_filename = potential_filename
+            word_pair_str = match_with_file.group(2)
+        else:
+            word_pair_str = match_with_file.group(2)
+    else:
+        await message.reply(f"Неверный формат команды. Используйте: /add [имя_файла.json] английское_слово=русский_перевод")
+        return
+
+    logging.info(f"add_new_word: potential_filename = '{potential_filename}', word_pair_str (after file parsing) = '{word_pair_str}'")
+
+    # If no filename was explicitly provided, use the user's current active file
+    if target_filename is None:
+        target_filename = word_manager.get_user_current_file(message.from_user.id)
+        if not target_filename: # Fallback if for some reason get_user_current_file returns nothing
+            target_filename = "all_words.json" # Дефолтный файл, если у пользователя нет текущего
     
-    target_filename = "all_words.json"
-    word_pair_str_index = 1
+    logging.info(f"add_new_word: final target_filename = '{target_filename}'")
 
-    if len(parts) > 1 and parts[1].endswith(".json"):
-        target_filename = parts[1]
-        word_pair_str_index = 2
-    elif len(parts) > 1 and parts[1].startswith("-"):
-        await message.reply("Неверный формат команды. Укажите имя файла перед парой слов или не указывайте его для использования файла по умолчанию.")
+    if not word_pair_str or not word_pair_str.strip():
+        await message.reply(f"Пожалуйста, используйте формат: /add [имя_файла.json] английское_слово=русский_перевод (текущий файл: {target_filename})")
         return
 
-    if len(parts) < word_pair_str_index + 1:
-        await message.reply("Пожалуйста, используйте формат: /add [имя_файла.json] английское_слово=русский_перевод")
-        return
-
-    word_pair_str = parts[word_pair_str_index]
     if "=" not in word_pair_str:
         await message.reply("Неверный формат. Используйте: английское_слово=русский_перевод")
         return
 
-    en_word, ru_word = word_pair_str.split("=", maxsplit=1)
-    en_word = en_word.strip().lower()
-    ru_word = ru_word.strip().lower()
+    en_word, ru_word = re.split(r'\s*=\s*', word_pair_str, maxsplit=1)
+    en_word = re.sub(r'\s+', ' ', en_word).strip().lower()
+    ru_word = re.sub(r'\s+', ' ', ru_word).strip().lower()
+
+    logging.info(f"add_new_word: en_word = '{en_word}', ru_word = '{ru_word}'")
 
     if not en_word or not ru_word:
         await message.reply("Английское слово или русский перевод не могут быть пустыми.")
         return
 
     if await add_word({"en": en_word, "ru": ru_word}, filename=target_filename):
-        await message.reply(f"Слово '{en_word}={ru_word}' успешно добавлено в файл '{target_filename}'.")
+        await message.reply(f"Слово \'{en_word}={ru_word}\' успешно добавлено в файл \'{target_filename}\' (ваш текущий набор слов).")
     else:
-        await message.reply(f"Не удалось добавить слово '{en_word}={ru_word}' в файл '{target_filename}'.")
+        await message.reply(f"Не удалось добавить слово \'{en_word}={ru_word}\' в файл \'{target_filename}\' (ваш текущий набор слов).")
 
 @router.message(Command("del"))
 async def del_word(message: Message):
@@ -106,33 +132,58 @@ async def del_word(message: Message):
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
-    # /del [файл_слов.json] английское_слово
-    parts = message.text.split(maxsplit=2)
+    command_and_args = message.text.split(maxsplit=1)
+    if len(command_and_args) < 2:
+        await message.reply(f"Пожалуйста, используйте формат: /del [имя_файла.json] английское_слово")
+        return
+
+    args_string = command_and_args[1].strip()
+    logging.info(f"del_word: args_string = '{args_string}'")
+
+    target_filename = None
+    word_to_delete = ""
+
+    # Pattern to capture an optional filename.json and the rest of the string as the word to delete
+    match_with_file = re.match(r"^(?:(\S+\.json)\s+)?(.+)$", args_string)
+    logging.info(f"del_word: match_with_file = {match_with_file}")
+
+    if match_with_file:
+        potential_filename = match_with_file.group(1)
+        if potential_filename:
+            target_filename = potential_filename
+            word_to_delete = match_with_file.group(2)
+        else:
+            word_to_delete = match_with_file.group(2)
+    else:
+        await message.reply(f"Неверный формат команды. Используйте: /del [имя_файла.json] английское_слово")
+        return
+
+    logging.info(f"del_word: potential_filename = '{potential_filename}', word_to_delete (after file parsing) = '{word_to_delete}'")
+
+    # If no filename was explicitly provided, use the user's current active file
+    if target_filename is None:
+        target_filename = word_manager.get_user_current_file(message.from_user.id)
+        if not target_filename: # Fallback if for some reason get_user_current_file returns nothing
+            target_filename = "all_words.json" # Дефолтный файл, если у пользователя нет текущего
     
-    target_filename = "all_words.json"
-    word_to_delete_index = 1
+    logging.info(f"del_word: final target_filename = '{target_filename}'")
 
-    if len(parts) > 1 and parts[1].endswith(".json"):
-        target_filename = parts[1]
-        word_to_delete_index = 2
-    elif len(parts) > 1 and parts[1].startswith("-"):
-        await message.reply("Неверный формат команды. Укажите имя файла перед словом или не указывайте его для использования файла по умолчанию.")
+    if not word_to_delete or not word_to_delete.strip():
+        await message.reply(f"Пожалуйста, используйте формат: /del [имя_файла.json] английское_слово (текущий файл: {target_filename})")
         return
+    
+    word_to_delete_en = word_to_delete.strip().lower()
 
-    if len(parts) < word_to_delete_index + 1:
-        await message.reply("Пожалуйста, используйте формат: /del [имя_файла.json] английское_слово")
-        return
-
-    word_to_delete_en = parts[word_to_delete_index].strip().lower()
+    logging.info(f"del_word: word_to_delete_en = '{word_to_delete_en}'")
 
     if not word_to_delete_en:
         await message.reply("Пожалуйста, укажите английское слово для удаления.")
         return
 
     if await delete_word(word_to_delete_en, filename=target_filename):
-        await message.reply(f"Слово '{word_to_delete_en}' успешно удалено из файла '{target_filename}'.")
+        await message.reply(f"Слово \'{word_to_delete_en}\' успешно удалено из файла \'{target_filename}\' (ваш текущий набор слов).")
     else:
-        await message.reply(f"Слово '{word_to_delete_en}' не найдено в файле '{target_filename}'.")
+        await message.reply(f"Слово \'{word_to_delete_en}\' не найдено в файле \'{target_filename}\' (ваш текущий набор слов).")
 
 @router.message(Command("stats"))
 async def show_all_user_stats(message: Message):
@@ -1017,13 +1068,16 @@ async def process_new_setting_value(message: Message, state: FSMContext):
             new_value = float(new_value_str)
         elif expected_type == list: # Handle list type
             # This is a bit complex, as list values might be comma-separated strings
-            # or quoted strings. We'll try to parse them.
-            if new_value_str.startswith('"') and new_value_str.endswith('"'):
-                new_value = [item.strip() for item in new_value_str[1:-1].split(',')]
-            elif new_value_str.startswith('[') and new_value_str.endswith(']'):
-                new_value = [item.strip() for item in new_value_str[1:-1].split(',')]
+            # or quoted strings. We'll try to parse them, and convert to int for ADMIN_IDS.
+            parsed_list_str = new_value_str.strip('[]').replace("'", '"') # Remove brackets, normalize quotes
+            if parsed_list_str:
+                raw_items = [item.strip() for item in parsed_list_str.split(',')]
+                if selected_setting == "ADMIN_IDS":
+                    new_value = [int(item) for item in raw_items if item.isdigit()]
+                else:
+                    new_value = raw_items
             else:
-                new_value = [item.strip() for item in new_value_str.split(',')]
+                new_value = [] # Empty list if input is empty
         elif expected_type == bool: # Handle boolean type
             new_value = new_value_str.lower() == "true"
         else:
@@ -1077,7 +1131,11 @@ async def update_config_file(setting_name: str, new_value: any):
             if isinstance(new_value, str):
                 value_to_write = f'"{new_value}"'
             elif isinstance(new_value, list):
-                value_to_write = json.dumps(new_value, ensure_ascii=False)
+                # Ensure list of integers is written correctly without quotes around numbers
+                if setting_name == "ADMIN_IDS" and all(isinstance(x, int) for x in new_value):
+                    value_to_write = f"[{', '.join(map(str, new_value))}]"
+                else:
+                    value_to_write = json.dumps(new_value, ensure_ascii=False)
             elif isinstance(new_value, bool):
                 value_to_write = str(new_value) # Ensures True/False are written as Python bools
             else:

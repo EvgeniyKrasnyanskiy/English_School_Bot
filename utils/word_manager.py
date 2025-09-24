@@ -8,6 +8,7 @@ import datetime
 import re # Added import
 import asyncio # Added import
 import database # Already present
+import config # Import config
 
 logger = logging.getLogger(__name__)
 
@@ -49,36 +50,17 @@ class WordManager:
 
     def _load_config(self):
         """Загружает текущие активные файлы для пользователей из конфига."""
-        from database import get_user_display_name # Import here to avoid circular dependencies on module level
         try:
             with open(self.config_file_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
                 if 'user_current_files' in config and isinstance(config['user_current_files'], dict):
-                    temp_user_files: Dict[int, Dict[str, str]] = {} # type: ignore
+                    temp_user_files: Dict[int, Dict[str, str]] = {} 
                     for key_str, filename in config['user_current_files'].items():
                         try:
                             user_id_int = int(key_str) # Attempt to parse as old format (int user ID)
-                            
-                            # Old format key found, try to fetch display name
-                            fetched_display_name = "Unknown User" # Default
-                            try:
-                                # This block attempts to run async code in a sync context.
-                                # It's a hack for migration and should be used with caution.
-                                # It tries to get the current event loop, or creates a new one.
-                                loop = asyncio.get_event_loop()
-                                if not loop.is_running(): # Only run if no loop is active
-                                    fetched_display_name_raw = loop.run_until_complete(get_user_display_name(user_id_int))
-                                    if fetched_display_name_raw:
-                                        fetched_display_name = fetched_display_name_raw
-                            except RuntimeError: # "There is no current event loop" or "Event loop is running"
-                                pass # Fallback to "Unknown User"
-                            except Exception as e:
-                                logger.error(f"[_load_config] Error fetching display name for user {user_id_int}: {e}")
-                                pass # Fallback to "Unknown User"
-
-                            temp_user_files[user_id_int] = {"filename": filename, "display_name": fetched_display_name}
-                            logger.info(f"[_load_config] Migrated old config key for user {user_id_int} to new format with filename {filename} and display name {fetched_display_name}.")
-
+                            # If old format, store with a placeholder display_name, it will be updated by set_user_current_file
+                            temp_user_files[user_id_int] = {"filename": filename, "display_name": "Unknown User"}
+                            logger.info(f"[_load_config] Loaded old config key for user {user_id_int} with filename {filename}.")
                         except ValueError: # New format key (user_id_display_name)
                             parts = key_str.split('_', 1) # Split only on first underscore
                             if parts and parts[0].isdigit():
@@ -86,11 +68,12 @@ class WordManager:
                                 # Extract display name from the key, removing user_id_ prefix
                                 display_name_from_key = parts[1].replace('_', ' ') if len(parts) > 1 else "Unknown User"
                                 temp_user_files[user_id_int] = {"filename": filename, "display_name": display_name_from_key}
+                                logger.info(f"[_load_config] Loaded new config key for user {user_id_int} with filename {filename} and display name {display_name_from_key}.")
                             else:
                                 logger.warning(f"[_load_config] Invalid key format in config file: {key_str}. Skipping.")
 
                     self.user_current_files = temp_user_files
-                    logger.info(f"[_load_config] Loaded user_current_files: {self.user_current_files}")
+                    logger.info(f"[_load_config] Final loaded user_current_files: {self.user_current_files}")
                 else:
                     logger.warning(f"[_load_config] 'user_current_files' key not found or invalid in {self.config_file_path}. Initializing empty.")
         except FileNotFoundError:
@@ -130,7 +113,7 @@ class WordManager:
     def get_user_current_file(self, user_id: int) -> str:
         """Возвращает имя текущего файла для конкретного пользователя."""
         user_data = self.user_current_files.get(user_id)
-        filename = user_data['filename'] if user_data else "all_words.json"
+        filename = user_data['filename'] if user_data else config.DEFAULT_WORD_SET
         logger.info(f"[get_user_current_file] For user {user_id}, returning filename: {filename}")
         return filename
     
@@ -153,7 +136,7 @@ class WordManager:
         if user_id is not None:
             filename = self.get_user_current_file(user_id)
         else:
-            filename = "all_words.json" # Дефолтный файл для обратной совместимости или общих операций
+            filename = config.DEFAULT_WORD_SET # Дефолтный файл для обратной совместимости или общих операций
         file_path = os.path.join(self.data_dir, "words", filename)
         logger.debug(f"[get_current_file_path] For user {user_id if user_id else 'None'}, file path: {file_path}")
         return file_path
@@ -185,8 +168,8 @@ class WordManager:
         """Сохраняет слова в указанный файл."""
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(words, f, ensure_ascii=False, indent=4)
-            logger.debug(f"[save_words_to_file] Successfully saved {len(words)} words to: {file_path}")
+                json.dump(words, f, ensure_ascii=False)
+            logger.debug(f"[save_words_to_file] Successfully saved {len(words)} words from: {file_path}")
             return True
         except Exception as e:
             logger.error(f"[save_words_to_file] Error saving file {file_path}: {e}")
@@ -256,7 +239,7 @@ class WordManager:
 
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(words or [], f, ensure_ascii=False, indent=4)
+                json.dump(words or [], f, ensure_ascii=False)
             logger.info(f"[create_new_file] Successfully created new file: {final_filename}")
             self.set_user_current_file(user_id, final_filename, user_display_name) # Устанавливаем новый файл как текущий
             return final_filename

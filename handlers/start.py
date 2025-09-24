@@ -9,6 +9,8 @@ from keyboards import main_menu_keyboard
 from utils.data_manager import update_user_profile_data
 from config import ADMIN_IDS
 from aiogram import Bot
+from utils.word_manager import word_manager # Import word_manager
+import config # Import config
 
 router = Router()
 
@@ -22,6 +24,9 @@ async def cmd_start(message: Message, state: FSMContext):
 
     if user:
         await update_last_active(user_id)
+        # Ensure display_name is updated in word_manager's config, in case it changed
+        user_display_name = message.from_user.full_name or message.from_user.username or user['name'] or "Unknown User"
+        word_manager.set_user_current_file(user_id, word_manager.get_user_current_file(user_id), user_display_name) # Update display_name
         await message.answer(
             f"С возвращением, {user['name']}!",
             reply_markup=main_menu_keyboard
@@ -44,6 +49,8 @@ async def process_name(message: Message, state: FSMContext, bot: Bot):
         first_name = message.from_user.first_name or ''
         last_name = message.from_user.last_name or ''
         username = message.from_user.username or ''
+        
+        user_display_name = message.from_user.full_name or username or user_name or "Unknown User"
 
         await add_user(
             user_id,
@@ -52,6 +59,8 @@ async def process_name(message: Message, state: FSMContext, bot: Bot):
             last_name,
             username
         )
+        # Set default word set for new user
+        word_manager.set_user_current_file(user_id, config.DEFAULT_WORD_SET, user_display_name)
         # Update user profile data in stats.json
         await update_user_profile_data(
             str(user_id),
