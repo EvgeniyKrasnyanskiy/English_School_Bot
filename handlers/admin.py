@@ -1,12 +1,12 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, BufferedInputFile # Import BufferedInputFile
 from aiogram.filters import Command
 from config import ADMIN_IDS
 from utils.utils import add_word, get_words_alphabetical, delete_word
 from utils.data_manager import calculate_overall_score_and_rank
 from utils.word_manager import word_manager
 import datetime
-from utils.audio_converter import convert_ogg_to_mp3 # Импорт для админской команды конвертации
+from utils.audio_converter import convert_single_ogg_to_mp3, check_for_similar_audio_file, convert_all_ogg_to_mp3 # Импорт для админской команды конвертации
 from database import delete_user_from_db, get_all_users, get_game_stats_by_word_set # Импорт get_all_users и get_game_stats_by_word_set
 import html # Import the html module for escaping
 import re # Add this import
@@ -21,7 +21,8 @@ import os # Импорт os для работы с файловой систем
 import uuid # Импорт uuid для генерации уникальных имен файлов
 from keyboards import cancel_keyboard_for_filename, confirm_broadcast_keyboard # Импорт клавиатуры для отмены
 from keyboards import main_menu_keyboard # Импорт клавиатуры для отмены
-from keyboards import cancel_keyboard
+from keyboards import cancel_keyboard, delete_audio_keyboard, confirm_delete_audio_keyboard, create_file_list_keyboard # Импорт клавиатуры для отмены
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton # Импорт InlineKeyboardMarkup и InlineKeyboardButton
 
 
 class AdminStates(StatesGroup):
@@ -32,6 +33,11 @@ class AdminStates(StatesGroup):
     waiting_for_ban_user_id = State()
     waiting_for_unban_user_id = State()
     waiting_for_broadcast_text = State()
+    waiting_for_files_to_move = State() # New state for moving audio files
+    waiting_for_convert_confirmation = State() # New state for confirming batch conversion
+    waiting_for_delete_selection = State() # New state for selecting directory to delete from
+    waiting_for_delete_confirmation = State() # New state for confirming deletion
+    waiting_for_filename_to_delete = State() # New state for deleting a single audio file
 
 GAME_NAME_TRANSLATIONS = {
     "guess_word": "Угадай слово (по аудио)",
@@ -50,7 +56,7 @@ CONFIGURABLE_SETTINGS = {
     "ADMIN_IDS": {"type": list, "description": "Список ID администраторов"},
     "RECALL_TYPING_COUNTDOWN_SECONDS": {"type": float, "description": "Время на ввод в игре 'Ввод по памяти'"},
     "MAX_USER_WORDS": {"type": int, "description": "Максимальное количество слов в пользовательском наборе"},
-    "CHECK_TEMP_AUDIO": {"type": bool, "description": "Проверять наличие новых аудио в папке temp_audio"},
+    "CHECK_NEW_AUDIO": {"type": bool, "description": "Проверять наличие новых аудио в папке /sounds/mp3 и уведомлять админа"},
 }
 
 @router.message(Command("add"))
@@ -448,23 +454,150 @@ async def show_all_users_current_files(message: Message):
 
     await message.reply(files_info_text, parse_mode="HTML")
 
-@router.message(Command("convert_audio"))
-async def convert_audio_command(message: Message):
+@router.message(Command("move_audio_files"))
+async def move_audio_files_command(message: Message, state: FSMContext, bot: Bot):
     if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         return
 
-    initial_message = (
-        "⚙️ *Конвертер аудиофайлов OGG в MP3:*\n\n"
-        "Бот будет искать файлы `.ogg` в папке `data/sounds`.\n"
-        "После успешной конвертации, оригинальные `.ogg` файлы будут перемещены в подпапку `data/sounds/ogg`."
-    )
-    await message.reply(initial_message, parse_mode="Markdown")
+    mp3_dir = os.path.join("data", "sounds", "mp3")
+    if not os.path.exists(mp3_dir) or not os.listdir(mp3_dir):
+        await message.reply("Папка `data/sounds/mp3` пуста или не существует.", parse_mode="Markdown")
+        await state.clear()
+        return
+
+    audio_files = [f for f in os.listdir(mp3_dir) if f.endswith(".mp3")]
+    audio_files.sort() # Sort for consistent numbering
+
+    if not audio_files:
+        await message.reply("В папке `data/sounds/mp3` нет MP3 аудиофайлов.", parse_mode="Markdown")
+        await state.clear()
+        return
+
+    files_list_text = "🎵 *Доступные MP3 аудиофайлы для перемещения:*\n"
+    numbered_files = {i + 1: filename for i, filename in enumerate(audio_files)}
     
-    await message.reply("Начинаю конвертацию аудиофайлов OGG в MP3. Это может занять некоторое время...")
-    log_messages, _ = await convert_ogg_to_mp3()
+    for num, filename in numbered_files.items():
+        files_list_text += f"{num}. `{html.escape(filename)}`\n"
+        # Send each audio file individually
+        try:
+            filepath = os.path.join(mp3_dir, filename)
+            with open(filepath, 'rb') as audio_file:
+                await message.reply_audio(BufferedInputFile(audio_file.read(), filename=filename), caption=f"{num}. {html.escape(filename)}", parse_mode="HTML")
+            # await asyncio.sleep(0.1) # Small delay to avoid API limits (temporarily commented out for debugging)
+        except Exception as e:
+            logging.error(f"Error sending audio file {filename}: {e}")
+            await message.reply(f"❌ Не удалось отправить аудиофайл `{html.escape(filename)}`. Ошибка: `{html.escape(str(e))}`", parse_mode="Markdown")
+
+    files_list_text += "\nОтправьте номера файлов (через пробел или запятую), которые хотите переместить в `data/sounds`, или нажмите 'Отмена'."
+
+    await message.reply(files_list_text, parse_mode="Markdown", reply_markup=cancel_keyboard)
+    await state.update_data(files_to_move_list=numbered_files)
+    await state.set_state(AdminStates.waiting_for_files_to_move)
+
+@router.message(AdminStates.waiting_for_files_to_move, F.text)
+async def process_files_to_move(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+
+    input_text = message.text.strip().lower()
+    if input_text == "отмена":
+        await message.reply("Операция перемещения файлов отменена.", reply_markup=main_menu_keyboard)
+        await state.clear()
+        return
+
+    state_data = await state.get_data()
+    numbered_files = state_data.get("files_to_move_list")
+
+    if not numbered_files:
+        await message.reply("Ошибка: список файлов для перемещения не найден. Пожалуйста, начните с `/move_audio_files` снова.", parse_mode="Markdown", reply_markup=main_menu_keyboard)
+        await state.clear()
+        return
+
+    selected_numbers_str = re.split(r'[\s,]+', input_text) # Split by space or comma
+    selected_numbers = []
+    for num_str in selected_numbers_str:
+        try:
+            num = int(num_str)
+            if num in numbered_files:
+                selected_numbers.append(num)
+            else:
+                await message.reply(f"❌ Неверный номер файла: `{num_str}`. Пожалуйста, введите корректные номера.", parse_mode="Markdown", reply_markup=cancel_keyboard)
+                return
+        except ValueError:
+            await message.reply(f"❌ Неверный формат ввода: `{num_str}` не является числом. Пожалуйста, введите номера файлов через пробел или запятую, или 'Отмена'.", parse_mode="Markdown", reply_markup=cancel_keyboard)
+            return
+
+    if not selected_numbers:
+        await message.reply("Вы не выбрали ни одного файла для перемещения. Пожалуйста, введите номера файлов или 'Отмена'.", reply_markup=cancel_keyboard)
+        return
+
+    mp3_source_dir = os.path.join("data", "sounds", "mp3")
+    target_sounds_dir = os.path.join("data", "sounds")
+
+    move_results = []
+    for num in selected_numbers:
+        filename = numbered_files[num]
+        source_filepath = os.path.join(mp3_source_dir, filename)
+        destination_filepath = os.path.join(target_sounds_dir, filename)
+
+        if os.path.exists(destination_filepath):
+            move_results.append(f"⚠️ Файл `{html.escape(filename)}` уже существует в `data/sounds`. Пропускаю перемещение.")
+        else:
+            try:
+                os.replace(source_filepath, destination_filepath) # Atomically move file (cut/paste)
+                move_results.append(f"✅ Файл `{html.escape(filename)}` успешно перемещен в `data/sounds`.")
+            except Exception as e:
+                logging.error(f"Ошибка при перемещении файла {filename}: {e}")
+                move_results.append(f"❌ Ошибка при перемещении `{html.escape(filename)}`: {e}")
+
+    final_message = "\n".join(move_results)
+    await message.reply(final_message, parse_mode="Markdown", reply_markup=main_menu_keyboard)
+    await state.clear()
+
+@router.message(Command("convert_all_audio"))
+async def convert_all_audio_command(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        return
+    
+    await message.reply(
+        "Вы собираетесь запустить пакетную конвертацию всех OGG аудиофайлов из `data/sounds/ogg` в MP3 в `data/sounds/mp3`. "
+        "Существующие MP3 файлы будут пропущены. Вы уверены, что хотите продолжить?",
+        parse_mode="Markdown",
+        reply_markup=confirm_broadcast_keyboard # Re-using the broadcast confirmation keyboard
+    )
+    await state.set_state(AdminStates.waiting_for_convert_confirmation)
+
+@router.message(AdminStates.waiting_for_convert_confirmation, F.text == "Да, отправить")
+async def confirm_convert_all_audio(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+    
+    await message.reply("Начинаю пакетную конвертацию... Это может занять некоторое время.")
+    
+    log_messages = await convert_all_ogg_to_mp3()
+    
     for log_msg in log_messages:
-        await message.reply(log_msg, parse_mode="Markdown")
+        await message.reply(log_msg)
+        await asyncio.sleep(0.1) # Small delay to avoid API limits
+        
+    await message.reply("Процесс пакетной конвертации завершен!", reply_markup=main_menu_keyboard)
+    await state.clear()
+
+@router.message(AdminStates.waiting_for_convert_confirmation, F.text == "Отмена")
+async def cancel_convert_all_audio(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+    
+    await state.clear()
+    await message.reply("Пакетная конвертация отменена.", reply_markup=main_menu_keyboard)
 
 @router.message(Command("users"))
 async def list_all_users(message: Message):
@@ -651,8 +784,8 @@ async def process_voice_for_new_audio(message: Message, state: FSMContext, bot: 
     #     await state.clear()
     #     return
 
-    # Создаем папку data/temp_audio если ее нет
-    temp_audio_dir = os.path.join("data", "temp_audio")
+    # Создаем папку data/sounds/temp_audio если ее нет
+    temp_audio_dir = os.path.join("data", "sounds", "temp_audio")
     os.makedirs(temp_audio_dir, exist_ok=True)
 
     # Генерируем уникальное имя для временного OGG файла
@@ -693,14 +826,27 @@ async def process_audio_filename(message: Message, state: FSMContext, bot: Bot):
     target_sounds_dir = os.path.join("data", "sounds")
     os.makedirs(target_sounds_dir, exist_ok=True)
 
-    # Перемещаем файл с временного пути в data/sounds с новым именем
+    # Define paths for permanent OGG and MP3 files
+    ogg_archive_dir = os.path.join(target_sounds_dir, "ogg")
+    mp3_output_dir = os.path.join(target_sounds_dir, "mp3")
+    os.makedirs(ogg_archive_dir, exist_ok=True)
+    os.makedirs(mp3_output_dir, exist_ok=True)
+
     final_ogg_filename = f"{filename}.ogg"
-    final_ogg_filepath = os.path.join(target_sounds_dir, final_ogg_filename)
-    final_mp3_filepath = os.path.join(target_sounds_dir, "mp3", f"{filename}.mp3")
+    final_ogg_filepath_permanent = os.path.join(ogg_archive_dir, final_ogg_filename)
+    final_mp3_filepath = os.path.join(mp3_output_dir, f"{filename}.mp3")
+
+    # NEW: Check for similar filenames across all /sounds subdirectories
+    if await check_for_similar_audio_file(filename):
+        await message.reply(
+            f"⚠️ Аудиофайл с похожим именем '{filename}' уже существует. "
+            "Пожалуйста, введите другое имя для аудиофайла или нажмите Отмена.",
+            reply_markup=cancel_keyboard_for_filename
+        )
+        return
 
     # Проверяем, существует ли файл с таким именем (как OGG, так и MP3)
-    old_mp3_filepath = os.path.join(target_sounds_dir, f"{filename}.mp3")
-    if os.path.exists(final_ogg_filepath) or os.path.exists(final_mp3_filepath) or os.path.exists(old_mp3_filepath):
+    if os.path.exists(final_ogg_filepath_permanent) or os.path.exists(final_mp3_filepath):
         await message.reply(
             f"Файл с именем '{filename}.ogg' или '{filename}.mp3' уже существует. "
             "Пожалуйста, введите другое имя для аудиофайла или нажмите Отмена.",
@@ -709,13 +855,14 @@ async def process_audio_filename(message: Message, state: FSMContext, bot: Bot):
         return
 
     try:
-        os.replace(temp_ogg_filepath, final_ogg_filepath)
+        # Move temporary OGG to its permanent OGG archive location
+        os.replace(temp_ogg_filepath, final_ogg_filepath_permanent)
+        
+        # Запускаем процесс конвертации, используя новый путь к OGG файлу
+        log_messages, conversion_successful = await convert_single_ogg_to_mp3(final_ogg_filepath_permanent, filename) # Используем существующую функцию
         
         if message.from_user.id in ADMIN_IDS: # Admin receives detailed messages
-            await message.reply(f"Файл '{final_ogg_filename}' успешно сохранен. Запускаю конвертацию... ")
-
-            # Запускаем процесс конвертации
-            log_messages, conversion_successful = await convert_ogg_to_mp3() # Используем существующую функцию
+            await message.reply(f"Файл '{final_ogg_filename}' успешно сохранен в архив OGG. Запускаю конвертацию... ")
             for log_msg in log_messages:
                 await message.reply(log_msg)
 
@@ -743,21 +890,15 @@ async def process_invalid_audio_filename(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_audio_upload")
 async def cancel_audio_upload_handler(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("У вас нет прав для выполнения этой команды.", show_alert=True)
-        await state.clear()
-        return
+    # if callback.from_user.id not in ADMIN_IDS:
+    #     await callback.answer("У вас нет прав для выполнения этой команды.", show_alert=True)
+    #     await state.clear()
+    #     return
 
     state_data = await state.get_data()
     temp_ogg_filepath = state_data.get("temp_ogg_filepath")
     if temp_ogg_filepath and os.path.exists(temp_ogg_filepath):
         os.remove(temp_ogg_filepath)
-    
-    temp_audio_dir = os.path.join("data", "temp_audio")
-    if os.path.exists(temp_audio_dir):
-        for item in os.listdir(temp_audio_dir):
-            os.remove(os.path.join(temp_audio_dir, item))
-        os.rmdir(temp_audio_dir)
     
     await state.clear()
     await callback.answer("Операция отменена.", show_alert=True)
@@ -793,6 +934,8 @@ async def show_settings(message: Message, state: FSMContext):
                         value = int(value_str)
                     elif setting_type is float:
                         value = float(value_str)
+                    elif setting_type is bool:
+                        value = value_str.lower() == "true"
                     elif setting_type is str:
                         # Remove quotes for string values
                         value = value_str.strip('"')
@@ -1013,6 +1156,256 @@ async def process_unban_user_id(message: Message, state: FSMContext):
     
     await state.clear()
     await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+
+@router.message(Command("delete_audio_files"))
+async def delete_audio_files_command(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        return
+    
+    await message.reply(
+        "Выберите, из какой папки вы хотите удалить аудиофайлы:",
+        reply_markup=delete_audio_keyboard
+    )
+    await state.set_state(AdminStates.waiting_for_delete_selection)
+
+@router.callback_query(AdminStates.waiting_for_delete_selection, F.data.in_([
+    "delete_all_ogg", "delete_all_mp3", 
+    "delete_single_ogg", "delete_single_mp3",
+    "delete_single_sounds"
+]))
+async def process_delete_selection(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("У вас нет прав для выполнения этой команды.", show_alert=True)
+        await state.clear()
+        return
+
+    delete_action = callback.data
+    sounds_dir = os.path.join("data", "sounds")
+    ogg_dir = os.path.join(sounds_dir, "ogg")
+    mp3_dir = os.path.join(sounds_dir, "mp3")
+
+    if delete_action == "delete_all_ogg":
+        confirmation_message = "Вы собираетесь удалить ВСЕ OGG аудиофайлы из папки `data/sounds/ogg`. Вы уверены?"
+        await state.update_data(delete_target="ogg", delete_type="all")
+        await callback.message.edit_text(
+            confirmation_message,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Да, удалить", callback_data="confirm_delete_audio_files")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_delete_audio")]
+            ])
+        )
+        await state.set_state(AdminStates.waiting_for_delete_confirmation)
+    elif delete_action == "delete_all_mp3":
+        confirmation_message = "Вы собираетесь удалить ВСЕ MP3 аудиофайлы из папки `data/sounds/mp3`. Вы уверены?"
+        await state.update_data(delete_target="mp3", delete_type="all")
+        await callback.message.edit_text(
+            confirmation_message,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Да, удалить", callback_data="confirm_delete_audio_files")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_delete_audio")]
+            ])
+        )
+        await state.set_state(AdminStates.waiting_for_delete_confirmation)
+    elif delete_action == "delete_single_ogg":
+        ogg_files = [f for f in os.listdir(ogg_dir) if f.endswith(".ogg")]
+        if not ogg_files:
+            await callback.message.edit_text("В папке `data/sounds/ogg` нет OGG файлов для удаления.", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_delete_selection")]])) # Added back button
+            await state.clear()
+            await callback.answer()
+            return
+        ogg_files.sort()
+        await state.update_data(delete_target="ogg", delete_type="single", files_to_list=ogg_files)
+        from keyboards import create_file_list_keyboard
+        await callback.message.edit_text(
+            "Выберите файл OGG для удаления или введите имя файла вручную:",
+            reply_markup=create_file_list_keyboard(ogg_files, "ogg"),
+        )
+        await state.set_state(AdminStates.waiting_for_filename_to_delete)
+    elif delete_action == "delete_single_mp3":
+        mp3_files = [f for f in os.listdir(mp3_dir) if f.endswith(".mp3")]
+        if not mp3_files:
+            await callback.message.edit_text("В папке `data/sounds/mp3` нет MP3 файлов для удаления.", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_delete_selection")]])) # Added back button
+            await state.clear()
+            await callback.answer()
+            return
+        mp3_files.sort()
+        await state.update_data(delete_target="mp3", delete_type="single", files_to_list=mp3_files)
+        from keyboards import create_file_list_keyboard
+        await callback.message.edit_text(
+            "Выберите файл MP3 для удаления или введите имя файла вручную:",
+            reply_markup=create_file_list_keyboard(mp3_files, "mp3"),
+        )
+        await state.set_state(AdminStates.waiting_for_filename_to_delete)
+    elif delete_action == "delete_single_sounds":
+        sounds_files = [f for f in os.listdir(sounds_dir) if os.path.isfile(os.path.join(sounds_dir, f)) and (f.endswith(".mp3") or f.endswith(".ogg"))]
+        if not sounds_files:
+            await callback.message.edit_text("В папке `data/sounds` нет аудиофайлов (MP3 или OGG) для удаления.", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_delete_selection")]])) # Added back button
+            await state.clear()
+            await callback.answer()
+            return
+        sounds_files.sort()
+        await state.update_data(delete_target="sounds", delete_type="single", files_to_list=sounds_files)
+        from keyboards import create_file_list_keyboard
+        await callback.message.edit_text(
+            "Выберите аудиофайл из `data/sounds` для удаления или введите имя файла вручную:",
+            reply_markup=create_file_list_keyboard(sounds_files, "sounds"),
+        )
+        await state.set_state(AdminStates.waiting_for_filename_to_delete)
+    await callback.answer()
+
+@router.callback_query(AdminStates.waiting_for_delete_confirmation, F.data == "confirm_delete_audio_files")
+async def confirm_delete_audio_files(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("У вас нет прав для выполнения этой команды.", show_alert=True)
+        await state.clear()
+        return
+    
+    state_data = await state.get_data()
+    delete_target = state_data.get("delete_target")
+    delete_type = state_data.get("delete_type")
+
+    if delete_type != "all": # This handler is only for "delete all" confirmation
+        await callback.message.edit_text("Ошибка: неверный тип операции для подтверждения.", reply_markup=None, parse_mode="Markdown")
+        await state.clear()
+        return
+
+    if not delete_target:
+        await callback.message.edit_text("Ошибка: цель удаления не определена. Пожалуйста, начните с /delete_audio_files снова.", reply_markup=None, parse_mode="Markdown")
+        await state.clear()
+        return
+
+    await callback.message.edit_text("Начинаю удаление аудиофайлов... Это может занять некоторое время.")
+    await callback.answer()
+    
+    log_messages = []
+    sounds_dir = os.path.join("data", "sounds")
+    ogg_dir = os.path.join(sounds_dir, "ogg")
+    mp3_dir = os.path.join(sounds_dir, "mp3")
+
+    from utils.audio_converter import delete_audio_files_from_dir # Import here to avoid circular dependency
+
+    if delete_target == "ogg":
+        log_messages.extend(await delete_audio_files_from_dir(ogg_dir, ".ogg"))
+    elif delete_target == "mp3":
+        log_messages.extend(await delete_audio_files_from_dir(mp3_dir, ".mp3"))
+    
+    final_message_text = "\n".join(log_messages)
+    await callback.message.reply(final_message_text, parse_mode="Markdown")
+    await callback.message.answer("Процесс удаления аудиофайлов завершен! Для продолжения удаления, выполните команду /delete_audio_files снова.", reply_markup=main_menu_keyboard)
+    await state.clear()
+
+@router.message(AdminStates.waiting_for_filename_to_delete, F.text)
+async def process_filename_to_delete(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+    
+    filename_to_delete = message.text.strip()
+    state_data = await state.get_data()
+    delete_target_dir_type = state_data.get("delete_target") # 'ogg', 'mp3' or 'sounds'
+
+    if not delete_target_dir_type:
+        await message.reply("Ошибка: папка для удаления не определена. Пожалуйста, начните с /delete_audio_files снова.", reply_markup=main_menu_keyboard)
+        await state.clear()
+        return
+    
+    target_dir = os.path.join("data", "sounds") if delete_target_dir_type == "sounds" else os.path.join("data", "sounds", delete_target_dir_type)
+    full_filepath_to_delete = os.path.join(target_dir, filename_to_delete)
+
+    log_messages = []
+    if os.path.exists(full_filepath_to_delete):
+        try:
+            os.remove(full_filepath_to_delete)
+            log_messages.append(f"✅ Файл `{html.escape(filename_to_delete)}` успешно удален из `{target_dir.replace(os.sep, '/')}`. Для продолжения удаления, выполните команду /delete\_audio\_files снова.")
+        except OSError as e:
+            log_messages.append(f"❌ Ошибка файловой системы при удалении `{html.escape(filename_to_delete)}`: {e}")
+        except Exception as e:
+            log_messages.append(f"❌ Непредвиденная ошибка при удалении файла `{html.escape(filename_to_delete)}`: {e}")
+    else:
+        log_messages.append(f"⚠️ Файл `{html.escape(filename_to_delete)}` не найден в папке `{target_dir.replace(os.sep, '/')}`.")
+
+    final_message_text = "\n".join(log_messages)
+    await message.reply(final_message_text, parse_mode="Markdown", reply_markup=main_menu_keyboard)
+    await state.clear()
+
+@router.callback_query(F.data.startswith("select_file_for_deletion_"), AdminStates.waiting_for_filename_to_delete)
+async def select_file_for_deletion_callback(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("У вас нет прав для выполнения этой команды.", show_alert=True)
+        await state.clear()
+        return
+    
+    parts = callback.data.split("_")
+    directory_type = parts[4] # Corrected index
+    filename_to_delete = "_".join(parts[5:]) # Reconstruct filename if it contains underscores
+
+    state_data = await state.get_data()
+    # Verify that the directory type from callback matches the state's delete_target
+    if directory_type != state_data.get("delete_target"):
+        await callback.answer("Ошибка: неверное действие.", show_alert=True)
+        await state.clear()
+        return
+
+    target_dir = os.path.join("data", "sounds") if directory_type == "sounds" else os.path.join("data", "sounds", directory_type)
+    full_filepath_to_delete = os.path.join(target_dir, filename_to_delete)
+
+    log_messages = []
+    if os.path.exists(full_filepath_to_delete):
+        try:
+            os.remove(full_filepath_to_delete)
+            log_messages.append(f"✅ Файл `{html.escape(filename_to_delete)}` успешно удален из `{target_dir.replace(os.sep, '/')}`. Для продолжения удаления, выполните команду /delete\_audio\_files снова.")
+        except OSError as e:
+            log_messages.append(f"❌ Ошибка файловой системы при удалении `{html.escape(filename_to_delete)}`: {e}")
+        except Exception as e:
+            log_messages.append(f"❌ Непредвиденная ошибка при удалении файла `{html.escape(filename_to_delete)}`: {e}")
+    else:
+        log_messages.append(f"⚠️ Файл `{html.escape(filename_to_delete)}` не найден в папке `{target_dir.replace(os.sep, '/')}`.")
+
+    final_message_text = "\n".join(log_messages)
+    await callback.message.reply(final_message_text, parse_mode="Markdown", reply_markup=main_menu_keyboard)
+    await state.clear()
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_delete_selection", AdminStates.waiting_for_filename_to_delete)
+async def back_to_delete_selection(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("У вас нет прав для выполнения этой команды.", show_alert=True)
+        await state.clear()
+        return
+    
+    await state.set_state(AdminStates.waiting_for_delete_selection)
+    await callback.message.edit_text(
+        "Выберите, из какой папки вы хотите удалить аудиофайлы:",
+        reply_markup=delete_audio_keyboard
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "cancel_delete_audio", AdminStates.waiting_for_delete_selection)
+@router.callback_query(F.data == "cancel_delete_audio", AdminStates.waiting_for_delete_confirmation)
+@router.callback_query(F.data == "cancel_delete_audio", AdminStates.waiting_for_filename_to_delete)
+async def cancel_delete_audio_files(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("У вас нет прав для выполнения этой команды.", show_alert=True)
+        await state.clear()
+        return
+    
+    await state.clear()
+    await callback.answer("Операция удаления отменена.", show_alert=True)
+    await callback.message.edit_text("Операция удаления отменена.", reply_markup=None)
+
+# New message handler for "Отмена" text during delete confirmation
+@router.message(AdminStates.waiting_for_delete_confirmation, F.text == "Отмена")
+async def cancel_delete_audio_files_message_handler(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+    await state.clear()
+    await message.reply("Операция удаления отменена.", reply_markup=main_menu_keyboard)
 
 
 # Helper function to update config.py

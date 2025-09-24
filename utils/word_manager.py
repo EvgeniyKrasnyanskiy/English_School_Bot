@@ -29,7 +29,7 @@ class WordManager:
         config_dir = os.path.join(main_data_dir, "config")
         sounds_dir = os.path.join(main_data_dir, "sounds")
         images_dir = os.path.join(main_data_dir, "images")
-        temp_audio_dir = os.path.join(main_data_dir, "temp_audio")
+        temp_audio_dir = os.path.join(sounds_dir, "temp_audio") # Moved temp_audio inside sounds_dir
         db_dir = os.path.join(main_data_dir, "db")
         
         for d in [main_data_dir, words_dir, config_dir, sounds_dir, images_dir, temp_audio_dir, db_dir]:

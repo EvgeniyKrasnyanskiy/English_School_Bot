@@ -114,3 +114,25 @@ confirm_broadcast_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True,
     one_time_keyboard=True
 )
+
+delete_audio_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="Удалить из /ogg по имени", callback_data="delete_single_ogg")],
+    [InlineKeyboardButton(text="Удалить из /mp3 по имени", callback_data="delete_single_mp3")],
+    [InlineKeyboardButton(text="Удалить все из /ogg", callback_data="delete_all_ogg")],
+    [InlineKeyboardButton(text="Удалить все из /mp3", callback_data="delete_all_mp3")],
+    [InlineKeyboardButton(text="Удалить из /sounds по имени", callback_data="delete_single_sounds")],
+    [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_delete_audio")]
+])
+
+confirm_delete_audio_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="Да, удалить", callback_data="confirm_delete_audio_files")],
+    [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_delete_audio")]
+])
+
+def create_file_list_keyboard(files: list[str], directory_type: str) -> InlineKeyboardMarkup:
+    keyboard_buttons = []
+    for file in files:
+        keyboard_buttons.append([InlineKeyboardButton(text=file, callback_data=f"select_file_for_deletion_{directory_type}_{file}")])
+    keyboard_buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_delete_selection")])
+    keyboard_buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_delete_audio")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)

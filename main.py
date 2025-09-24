@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 import os
@@ -11,7 +10,7 @@ from logging.handlers import TimedRotatingFileHandler # Импортируем T
 from config import TOKEN, ADMIN_IDS
 from database import init_db
 from keyboards import main_menu_keyboard
-from utils.audio_converter import convert_ogg_to_mp3
+from utils.audio_converter import convert_single_ogg_to_mp3
 from utils.audio_cleanup import cleanup_guess_audio
 from utils.data_manager import get_banned_users
 

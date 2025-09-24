@@ -28,12 +28,12 @@ async def check_and_rotate_logs():
         else:
             print(f"Сегодня не 1-е число месяца ({now.day}). Пропускаю ротацию логов.")
 
-async def check_temp_audio_files(bot: Bot):
+async def check_new_audio_for_admin_notification(bot: Bot):
     """
-    Checks daily at 12 PM for new audio files in data/sounds/ogg and notifies admin if CHECK_TEMP_AUDIO is True.
+    Checks daily at 12 PM for new audio files in data/sounds/mp3 and notifies admin if CHECK_NEW_AUDIO is True.
     """
-    temp_audio_dir = os.path.join("data", "sounds", "ogg") # Изменено на data/sounds/ogg
-    os.makedirs(temp_audio_dir, exist_ok=True) # Ensure directory exists
+    mp3_dir = os.path.join("data", "sounds", "mp3") # Изменено на data/sounds/mp3
+    os.makedirs(mp3_dir, exist_ok=True) # Ensure directory exists
 
     while True:
         now = datetime.datetime.now()
@@ -43,20 +43,20 @@ async def check_temp_audio_files(bot: Bot):
             next_run += datetime.timedelta(days=1)
         
         wait_seconds = (next_run - now).total_seconds()
-        print(f"Следующая проверка папки temp_audio запланирована на {next_run}. Ожидание {wait_seconds:.0f} секунд.")
+        print(f"Следующая проверка папки mp3 запланирована на {next_run}. Ожидание {wait_seconds:.0f} секунд.")
         await asyncio.sleep(wait_seconds)
 
         now = datetime.datetime.now() # Update `now` after sleep
         
-        if not config.CHECK_TEMP_AUDIO:
-            print("Проверка папки data/sounds/ogg отключена в config.py.")
+        if not config.CHECK_NEW_AUDIO:
+            print("Проверка папки data/sounds/mp3 отключена в config.py.")
             continue
 
-        audio_files = [f for f in os.listdir(temp_audio_dir) if os.path.isfile(os.path.join(temp_audio_dir, f))]
+        audio_files = [f for f in os.listdir(mp3_dir) if os.path.isfile(os.path.join(mp3_dir, f))]
         
         if audio_files:
             count = len(audio_files)
-            admin_message = f"В папке `data/sounds/ogg` обнаружено {count} новых аудиофайлов, требующих внимания."\
+            admin_message = f"В папке `data/sounds/mp3` обнаружено {count} новых аудиофайлов, требующих внимания."\
                             f"\n\nИмена файлов: {', '.join(audio_files)}"
             for admin_id in config.ADMIN_IDS:
                 try:
@@ -65,8 +65,8 @@ async def check_temp_audio_files(bot: Bot):
                 except Exception as e:
                     print(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
         else:
-            print("В папке data/sounds/ogg новых аудиофайлов не найдено.")
+            print("В папке data/sounds/mp3 новых аудиофайлов не найдено.")
 
 async def start_background_tasks(bot: Bot):
     asyncio.create_task(check_and_rotate_logs())
-    asyncio.create_task(check_temp_audio_files(bot))
+    asyncio.create_task(check_new_audio_for_admin_notification(bot))
