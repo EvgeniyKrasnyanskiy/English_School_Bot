@@ -11,7 +11,7 @@ from utils.audio_cleanup import cleanup_guess_audio
 from utils.word_manager import word_manager # Импортируем word_manager
 from database import update_last_active
 import asyncio
-from handlers.user_words import switch_my_set_command # Импорт switch_my_set_command
+from handlers.user_words import _send_file_selection_menu_helper # Импорт _send_file_selection_menu_helper
 
 router = Router()
 
@@ -136,4 +136,4 @@ async def back_to_main_from_learn(message: Message, state: FSMContext, bot: Bot)
 
 @router.message(F.text == "🔁 Сменить набор")
 async def switch_set_via_button(message: Message, state: FSMContext):
-    await switch_my_set_command(message, state) # Вызываем функцию смены набора из user_words.py
+    await _send_file_selection_menu_helper(message, state) # Вызываем новую функцию для смены набора

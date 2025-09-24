@@ -64,17 +64,20 @@ confirm_create_set_keyboard = InlineKeyboardMarkup(inline_keyboard=[
 ])
 
 # Клавиатура для управления пользовательским набором слов
-def get_my_set_keyboard(is_personal_set: bool = False) -> InlineKeyboardMarkup:
+def get_my_set_keyboard(is_personal_set: bool = False, show_list_button_text: str = "📖 Показать список слов") -> InlineKeyboardMarkup:
     keyboard_buttons = []
 
     if is_personal_set:
         keyboard_buttons.append([InlineKeyboardButton(text="➕ Добавить слово", callback_data="add_my_word")])
         keyboard_buttons.append([InlineKeyboardButton(text="➖ Удалить слово", callback_data="del_my_word")])
         keyboard_buttons.append([InlineKeyboardButton(text="🗑️ Удалить набор", callback_data="delete_my_word_set")])
-        keyboard_buttons.append([InlineKeyboardButton(text="📖 Показать список слов", callback_data="show_my_word_list")])
+        keyboard_buttons.append([InlineKeyboardButton(text=show_list_button_text, callback_data="toggle_my_word_list")]) # Использование нового callback_data
     else:
-        keyboard_buttons.append([InlineKeyboardButton(text="📖 Показать список слов", callback_data="show_my_word_list")])
+        keyboard_buttons.append([InlineKeyboardButton(text=show_list_button_text, callback_data="toggle_my_word_list")]) # Использование нового callback_data
 
+    # Добавляем кнопку "Сменить набор" здесь
+    keyboard_buttons.append([InlineKeyboardButton(text="🔁 Сменить набор", callback_data="switch_my_set_inline")])
+    
     keyboard_buttons.append([InlineKeyboardButton(text="⬆️ В главное меню", callback_data="back_to_main_from_my_set")])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)

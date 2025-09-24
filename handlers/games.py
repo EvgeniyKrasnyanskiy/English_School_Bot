@@ -47,11 +47,52 @@ async def start_guess_word_game(message: Message, state: FSMContext):
 
 async def send_guess_word_question(message: Message, state: FSMContext):
     state_data = await state.get_data()
-    words = state_data['all_words']
-    word = get_random_word(words)
+    all_words = state_data['all_words']
+    user_id = state_data['user_id'] # Get user_id from state
+
+    words_with_audio = []
+    words_missing_audio_en = [] # Changed to English words
+
+    # Check each word for an audio file
+    from utils.data_manager import get_audio_filepath # Ensure this is imported
+    for w_data in all_words:
+        audio_path = await get_audio_filepath(w_data['en'])
+        if audio_path:
+            words_with_audio.append(w_data)
+        else:
+            words_missing_audio_en.append(w_data['en']) # Collect English words
+
+    if not words_with_audio:
+        # No audio files found for any words in the set
+        no_audio_message = "Извините, для всех слов в выбранном наборе не найдены аудиофайлы. "
+        await message.answer(no_audio_message) # Send first part of the message
+
+        if words_missing_audio_en:
+            missing_words_list = "Отсутствуют аудиофайлы для следующих слов:\n" + '\n'.join(words_missing_audio_en) + "."
+            await message.answer(missing_words_list +
+                                 "\nПожалуйста, выберите другую игру или смените набор слов." +
+                                 "\nНо вы также можете поучавствовать в наполнении базы озвученных слов, используя команду /new_sound. Слово будет добавлено сразу после проверки администратором в течение суток.",
+                                 reply_markup=main_menu_keyboard)
+        else:
+            await message.answer("Пожалуйста, выберите другую игру или смените набор слов." +
+                                 "\nНо вы также можете поучавствовать в наполнении базы озвученных слов, используя команду /new_sound. Слово будет добавлено сразу после проверки администратором в течение суток.",
+                                 reply_markup=main_menu_keyboard)
+        await state.clear()
+        return
+
+    # If there are words with missing audio, inform the user but proceed with available words
+    if words_missing_audio_en:
+        missing_audio_list_message = ("Внимание! Для следующих слов из вашего набора отсутствуют аудиофайлы, поэтому они не будут использованы в этой игре:\n" +
+              '\n'.join(words_missing_audio_en) + "." +
+              f"\nНо вы также можете поучавствовать в наполнении базы озвученных слов, используя команду /new_sound. Слово будет добавлено сразу после проверки администратором в течение суток.")
+ 
+        await message.answer(missing_audio_list_message)
+
+    # Select a random word from those that have audio files
+    word = get_random_word(words_with_audio)
 
     # Build 3 distractors in Russian, 1 correct in Russian
-    options = get_quiz_options(word['ru'], words)
+    options = get_quiz_options(word['ru'], all_words) # Use all_words for options to include missing audio words for distractors if needed
 
     # Save current word and options for later validation
     await state.update_data(
@@ -62,8 +103,7 @@ async def send_guess_word_question(message: Message, state: FSMContext):
 
     # Try to send audio for the word if exists via data_manager like in learn
     from aiogram.types import FSInputFile
-    from utils.data_manager import get_audio_filepath
-    audio_path = await get_audio_filepath(word['en'])
+    audio_path = await get_audio_filepath(word['en']) # This should always be true due to filtering
     if audio_path:
         obfuscated_filename = f"{uuid.uuid4().hex}.mp3"
         sent_audio = await message.answer_audio(
@@ -75,11 +115,13 @@ async def send_guess_word_question(message: Message, state: FSMContext):
         current_audio_ids = (await state.get_data()).get("guess_sent_audio_ids", [])
         current_audio_ids.append(sent_audio.message_id)
         await state.update_data(guess_sent_audio_ids=current_audio_ids)
+    # The else block below is technically unreachable if words_with_audio is not empty,
+    # but keeping it for robustness or future changes. It should ideally not be hit.
     else:
-        await message.answer("Извините, для этого слова аудиофайл не найден. Пожалуйста, выберите другую игру. Вы также можете поучавствовать в наполнении базы озвученных слов, используя команду /new_sound. Слово будет добавлено сразу после проверки администратором (~24 часа).",
+        await message.answer("Произошла непредвиденная ошибка: не удалось отправить аудио для выбранного слова. \nНо вы также можете поучавствовать в наполнении базы озвученных слов, используя команду /new_sound. Слово будет добавлено сразу после проверки администратором в течение суток.",
                              reply_markup=main_menu_keyboard)
         await state.clear()
-        return # Прекращаем выполнение функции, так как аудиофайла нет
+        return
 
     await message.answer(
         "Выберите правильный перевод на русский:",
