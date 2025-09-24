@@ -448,48 +448,48 @@ async def switch_my_set_inline_callback(callback: CallbackQuery, state: FSMConte
     await _send_file_selection_menu_helper(callback.message, state)
 
 
-@router.message(Command("list")) # Обновленный обработчик команды /list
-async def list_user_words_command(message: Message, state: FSMContext):
-    user_id = message.from_user.id
-    if user_id in await get_banned_users():
-        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.")
-        return
+# @router.message(Command("list")) # Обновленный обработчик команды /list
+# async def list_user_words_command(message: Message, state: FSMContext):
+#     user_id = message.from_user.id
+#     if user_id in await get_banned_users():
+#         await message.reply("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.")
+#         return
     
-    parts = message.text.split(maxsplit=1)
-    target_filename = word_manager.get_user_current_file(user_id) # По умолчанию - текущий файл пользователя
+#     parts = message.text.split(maxsplit=1)
+#     target_filename = word_manager.get_user_current_file(user_id) # По умолчанию - текущий файл пользователя
 
-    if len(parts) > 1:
-        potential_filename = parts[1].strip()
-        if potential_filename.endswith(".json"):
-            if potential_filename in word_manager.get_available_files() or \
-               potential_filename == word_manager.get_user_custom_filename(user_id, await _get_user_display_name(user_id)):
-                target_filename = potential_filename
-            else:
-                await message.answer("Вы не можете просматривать слова из этого файла.", reply_markup=main_menu_keyboard)
-                await state.clear()
-                return
-        else:
-            await message.answer("Неверный формат команды. Используйте: <code>/list [имя_файла.json]</code> или <code>/list</code> для просмотра вашего текущего файла.", parse_mode="HTML")
-            await state.clear()
-            return
+#     if len(parts) > 1:
+#         potential_filename = parts[1].strip()
+#         if potential_filename.endswith(".json"):
+#             if potential_filename in word_manager.get_available_files() or \
+#                potential_filename == word_manager.get_user_custom_filename(user_id, await _get_user_display_name(user_id)):
+#                 target_filename = potential_filename
+#             else:
+#                 await message.answer("Вы не можете просматривать слова из этого файла.", reply_markup=main_menu_keyboard)
+#                 await state.clear()
+#                 return
+#         else:
+#             await message.answer("Неверный формат команды. Используйте: <code>/list [имя_файла.json]</code> или <code>/list</code> для просмотра вашего текущего файла.", parse_mode="HTML")
+#             await state.clear()
+#             return
 
-    words = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, "words", target_filename))
-    words.sort(key=lambda x: x['en'].lower()) # Сортируем слова по английскому эквиваленту
-    if not words:
-        await message.answer(f"Словарь файла <code>{html.escape(target_filename)}</code> пуст или файл не найден.", parse_mode="HTML")
-        await state.clear()
-        return
+#     words = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, "words", target_filename))
+#     words.sort(key=lambda x: x['en'].lower()) # Сортируем слова по английскому эквиваленту
+#     if not words:
+#         await message.answer(f"Словарь файла <code>{html.escape(target_filename)}</code> пуст или файл не найден.", parse_mode="HTML")
+#         await state.clear()
+#         return
 
-    word_list_text = f"📁 <b>Слова в файле {html.escape(target_filename)} (по алфавиту):</b>\n\n"
-    for word_pair in words:
-        word_list_text += f"  • <code>{html.escape(word_pair['en'])} = {html.escape(word_pair['ru'])}</code>\n"
+#     word_list_text = f"📁 <b>Слова в файле {html.escape(target_filename)} (по алфавиту):</b>\n\n"
+#     for word_pair in words:
+#         word_list_text += f"  • <code>{html.escape(word_pair['en'])} = {html.escape(word_pair['ru'])}</code>\n"
     
-    await message.answer(
-        word_list_text,
-        parse_mode="HTML",
-        reply_markup=main_menu_keyboard
-    )
-    await state.clear()
+#     await message.answer(
+#         word_list_text,
+#         parse_mode="HTML",
+#         reply_markup=main_menu_keyboard
+#     )
+#     await state.clear()
 
 
 @router.callback_query(F.data == "toggle_my_word_list") # Измененный callback_data
