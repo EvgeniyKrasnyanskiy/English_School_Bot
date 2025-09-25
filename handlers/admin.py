@@ -38,6 +38,7 @@ class AdminStates(StatesGroup):
     waiting_for_delete_selection = State() # New state for selecting directory to delete from
     waiting_for_delete_confirmation = State() # New state for confirming deletion
     waiting_for_filename_to_delete = State() # New state for deleting a single audio file
+    waiting_for_admin_action = State()
 
 GAME_NAME_TRANSLATIONS = {
     "guess_word": "Угадай слово (по аудио)",
@@ -55,9 +56,9 @@ CONFIGURABLE_SETTINGS = {
     "TEST_QUESTIONS_COUNT": {"type": int, "description": "Количество вопросов в тесте"},
     "ADMIN_IDS": {"type": list, "description": "Список ID администраторов"},
     "RECALL_TYPING_COUNTDOWN_SECONDS": {"type": float, "description": "Время на ввод в игре 'Ввод по памяти'"},
-    "MAX_USER_WORDS": {"type": int, "description": "Максимальное количество слов в пользовательском наборе"},
+    "MAX_USER_WORDS": {"type": int, "description": "Максимальное количество слов в пользовательском словаре"},
     "CHECK_NEW_AUDIO": {"type": bool, "description": "Проверять наличие новых аудио в папке /sounds/mp3 и уведомлять админа"},
-    "DEFAULT_WORD_SET": {"type": str, "description": "Набор слов по умолчанию при первом запуске или отсутствии активного"},
+    "DEFAULT_WORD_SET": {"type": str, "description": "Словарь по умолчанию при первом запуске или отсутствии активного"},
 }
 
 @router.message(Command("add"))
@@ -122,9 +123,9 @@ async def add_new_word(message: Message):
         return
 
     if await add_word({"en": en_word, "ru": ru_word}, filename=target_filename):
-        await message.reply(f"Слово \'{en_word}={ru_word}\' успешно добавлено в файл \'{target_filename}\' (ваш текущий набор слов).")
+        await message.reply(f"Слово \'{en_word}={ru_word}\' успешно добавлено в файл \'{target_filename}\' (ваш текущий словарь).")
     else:
-        await message.reply(f"Не удалось добавить слово \'{en_word}={ru_word}\' в файл \'{target_filename}\' (ваш текущий набор слов).")
+        await message.reply(f"Не удалось добавить слово \'{en_word}={ru_word}\' в файл \'{target_filename}\' (ваш текущий словарь).")
 
 @router.message(Command("del"))
 async def del_word(message: Message):
@@ -181,9 +182,9 @@ async def del_word(message: Message):
         return
 
     if await delete_word(word_to_delete_en, filename=target_filename):
-        await message.reply(f"Слово \'{word_to_delete_en}\' успешно удалено из файла \'{target_filename}\' (ваш текущий набор слов).")
+        await message.reply(f"Слово \'{word_to_delete_en}\' успешно удалено из файла \'{target_filename}\' (ваш текущий словарь).")
     else:
-        await message.reply(f"Слово \'{word_to_delete_en}\' не найдено в файле \'{target_filename}\' (ваш текущий набор слов).")
+        await message.reply(f"Слово \'{word_to_delete_en}\' не найдено в файле \'{target_filename}\' (ваш текущий словарь).")
 
 @router.message(Command("stats"))
 async def show_all_user_stats(message: Message):
@@ -273,7 +274,7 @@ async def show_all_user_stats(message: Message):
         # Get and display game stats by word set
         game_stats_by_set = await get_game_stats_by_word_set(user_id)
         if game_stats_by_set:
-            stats_text += "  <b>Статистика по наборам слов:</b>\n"
+            stats_text += "  <b>Статистика по словарям:</b>\n"
             for word_set, games in game_stats_by_set.items():
                 stats_text += f"    └ 📁 `{html.escape(word_set)}`:\n"
                 for game_type, stats in games.items():
@@ -332,7 +333,7 @@ async def list_word_files(message: Message):
     for file in files:
         info = word_manager.get_file_info(file)
         if info:
-            status = "✅ (текущий)" if file == admin_current_file else ""
+            status = "✅" if file == admin_current_file else ""
             files_text += f"• *{file}* {status}\n"
             files_text += f"  └ Слов: {info['word_count']}, Размер: {info['file_size']} байт\n\n"
     
@@ -819,21 +820,23 @@ async def cancel_send_message(message: Message, state: FSMContext):
 
 @router.message(Command("new_sound"))
 async def add_new_audio_command(message: Message, state: FSMContext):
-    # Удаляем проверку на ADMIN_IDS, делая команду общедоступной
-    # if message.from_user.id not in ADMIN_IDS:
-    #     await message.reply("У вас нет прав для выполнения этой команды.")
-    #     return
 
-    await message.reply("Пожалуйста, отправьте сначала голосовое сообщение (озвученное слово или выражение), которое вы хотите добавить. Затем бот поросит вас ввести имя файла для этого аудиофайла которое должно быть на английском языке и точно совпадать с озвученным словом или выражением.", reply_markup=cancel_keyboard)
+    # Удаляем дублирующееся сообщение
+    # await message.reply("Пожалуйста, отправьте сначала голосовое сообщение (озвученное слово или выражение), которое вы хотите добавить. Затем бот поросит вас ввести имя файла для этого аудиофайла которое должно быть на английском языке и точно совпадать с озвученным словом или выражением.", reply_markup=cancel_keyboard)
     await state.set_state(AdminStates.waiting_for_voice)
+    first_prompt_message = await message.answer("Пожалуйста, отправьте сначала голосовое сообщение (озвученное слово или выражение), которое вы хотите добавить. Затем бот поросит вас ввести имя файла для этого аудиофайла которое должно быть на английском языке и точно совпадать с озвученным словом или выражением.", reply_markup=cancel_keyboard)
+    await state.update_data(first_prompt_message_id=first_prompt_message.message_id)
 
 @router.message(AdminStates.waiting_for_voice, F.voice)
 async def process_voice_for_new_audio(message: Message, state: FSMContext, bot: Bot):
-    # Удаляем проверку на ADMIN_IDS
-    # if message.from_user.id not in ADMIN_IDS:
-    #     await message.reply("У вас нет прав для выполнения этой команды.")
-    #     await state.clear()
-    #     return
+    state_data = await state.get_data()
+    first_prompt_message_id = state_data.get("first_prompt_message_id")
+    if first_prompt_message_id:
+        try:
+            await asyncio.sleep(0.25)
+            await bot.delete_message(chat_id=message.chat.id, message_id=first_prompt_message_id)
+        except Exception as e:
+            logging.error(f"Не удалось удалить первое сообщение-подсказку: {e}")
 
     # Создаем папку data/sounds/temp_audio если ее нет
     temp_audio_dir = os.path.join("data", "sounds", "temp_audio")
@@ -848,17 +851,21 @@ async def process_voice_for_new_audio(message: Message, state: FSMContext, bot: 
     file = await bot.get_file(file_id)
     await bot.download_file(file.file_path, temp_ogg_filepath)
 
-    await state.update_data(temp_ogg_filepath=temp_ogg_filepath)
-    await message.reply("Голосовое сообщение получено. Как вы хотите назвать этот аудиофайл (без расширения)?\n\n*Имя файла должно быть только на английском языке!*", parse_mode="Markdown", reply_markup=cancel_keyboard_for_filename)
+    await state.update_data(temp_ogg_filepath=temp_ogg_filepath, original_voice_message_id=message.message_id)
+    second_prompt_message = await message.reply("Голосовое сообщение получено. Как вы хотите назвать этот аудиофайл (без расширения)?\n\n*Имя файла должно быть только на английском языке!*", parse_mode="Markdown", reply_markup=cancel_keyboard_for_filename)
+    await state.update_data(second_prompt_message_id=second_prompt_message.message_id)
     await state.set_state(AdminStates.waiting_for_audio_filename)
 
 @router.message(AdminStates.waiting_for_audio_filename, F.text)
 async def process_audio_filename(message: Message, state: FSMContext, bot: Bot):
-    # Удаляем проверку на ADMIN_IDS
-    # if message.from_user.id not in ADMIN_IDS:
-    #     await message.reply("У вас нет прав для выполнения этой команды.")
-    #     await state.clear()
-    #     return
+    state_data = await state.get_data()
+    second_prompt_message_id = state_data.get("second_prompt_message_id")
+    if second_prompt_message_id:
+        try:
+            await asyncio.sleep(0.25)
+            await bot.delete_message(chat_id=message.chat.id, message_id=second_prompt_message_id)
+        except Exception as e:
+            logging.error(f"Не удалось удалить второе сообщение-подсказку: {e}")
 
     filename = message.text.strip().lower()
     if not filename:
@@ -918,11 +925,19 @@ async def process_audio_filename(message: Message, state: FSMContext, bot: Bot):
                 await message.reply(log_msg)
 
             if conversion_successful:
-                await message.reply("Процесс добавления и конвертации аудиофайла завершен!")
+                await message.reply("Процесс добавления аудиофайла завершен! Оригинальный аудиофайл будет удален из чата.")
             else:
-                await message.reply("Добавлено успешно, но конвертация не удалась. Конвертируйте самостоятельно или настройте конвертер.")
+                await message.reply("Добавлено успешно, но возникли некоторые трудности конвертации. Я предупредил об этом администратора. Отправленный аудиофайл будет удален из чата, чтобы не засорять его. \nВы можете вернуться в главное меню или прислать новое озвученное слово (или словосочетание) используя команду /new_sound.")
         else: # Non-admin user receives simplified message
-            await message.reply("✅ Спасибо! Ваш аудиофайл получен и ожидает одобрения администратора.")
+            await message.reply("✅ Спасибо! Ваш аудиофайл получен и ожидает одобрения администратора. Отправленный аудиофайл будет удален из чата, чтобы не засорять его. \nВы можете вернуться в главное меню или прислать новое озвученное слово (или словосочетание) используя команду /new_sound.")
+
+        original_voice_message_id = state_data.get("original_voice_message_id")
+        if original_voice_message_id:
+            try:
+                await asyncio.sleep(0.8) # Добавляем задержку в 0.8 секунды
+                await bot.delete_message(chat_id=message.chat.id, message_id=original_voice_message_id)
+            except Exception as e:
+                logging.error(f"Не удалось удалить оригинальное аудиосообщение: {e}")
 
         await state.clear()
 
@@ -1270,8 +1285,8 @@ async def process_delete_selection(callback: CallbackQuery, state: FSMContext):
     elif delete_action == "delete_single_ogg":
         ogg_files = [f for f in os.listdir(ogg_dir) if f.endswith(".ogg")]
         if not ogg_files:
-            await callback.message.edit_text("В папке `data/sounds/ogg` нет OGG файлов для удаления.", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_delete_selection")]])) # Added back button
-            await state.clear()
+            await callback.message.edit_text("В папке `data/sounds/ogg` нет OGG файлов для удаления.", parse_mode="Markdown", reply_markup=delete_audio_keyboard)
+            await state.set_state(AdminStates.waiting_for_delete_selection)
             await callback.answer()
             return
         ogg_files.sort()
@@ -1285,8 +1300,8 @@ async def process_delete_selection(callback: CallbackQuery, state: FSMContext):
     elif delete_action == "delete_single_mp3":
         mp3_files = [f for f in os.listdir(mp3_dir) if f.endswith(".mp3")]
         if not mp3_files:
-            await callback.message.edit_text("В папке `data/sounds/mp3` нет MP3 файлов для удаления.", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_delete_selection")]])) # Added back button
-            await state.clear()
+            await callback.message.edit_text("В папке `data/sounds/mp3` нет MP3 файлов для удаления.", parse_mode="Markdown", reply_markup=delete_audio_keyboard)
+            await state.set_state(AdminStates.waiting_for_delete_selection)
             await callback.answer()
             return
         mp3_files.sort()
@@ -1300,8 +1315,8 @@ async def process_delete_selection(callback: CallbackQuery, state: FSMContext):
     elif delete_action == "delete_single_sounds":
         sounds_files = [f for f in os.listdir(sounds_dir) if os.path.isfile(os.path.join(sounds_dir, f)) and (f.endswith(".mp3") or f.endswith(".ogg"))]
         if not sounds_files:
-            await callback.message.edit_text("В папке `data/sounds` нет аудиофайлов (MP3 или OGG) для удаления.", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_delete_selection")]])) # Added back button
-            await state.clear()
+            await callback.message.edit_text("В папке `data/sounds` нет аудиофайлов (MP3 или OGG) для удаления.", parse_mode="Markdown", reply_markup=delete_audio_keyboard)
+            await state.set_state(AdminStates.waiting_for_delete_selection)
             await callback.answer()
             return
         sounds_files.sort()

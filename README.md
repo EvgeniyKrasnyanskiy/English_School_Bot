@@ -105,7 +105,7 @@ This is a Telegram bot designed to help users learn English words through variou
     -   `📝 Тест знаний`: Start a knowledge test.
     -   `📊 Статистика`: View your learning statistics.
     -   `❓ Справка`: Get help information.
-    -   `🔁 Сменить набор`: Change your active word set.
+    -   `🔁 Словари`: Change your active word set.
     -   `⬆️ В главное меню`: Return to the main menu.
     -   (And various inline keyboard actions for specific features)
 

@@ -5,7 +5,7 @@ main_menu_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📚 Учить слова"), KeyboardButton(text="🎮 Игры")],
         [KeyboardButton(text="📝 Тест знаний"), KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="❓ Справка"), KeyboardButton(text="🔁 Сменить набор")],
+        [KeyboardButton(text="❓ Справка"), KeyboardButton(text="🔁 Словари")],
         [KeyboardButton(text="⬆️ В главное меню")]
     ],
     resize_keyboard=True,
@@ -57,28 +57,28 @@ start_recall_typing_keyboard = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Начать", callback_data="start_recall_typing_countdown")]
 ])
 
-# Клавиатура для подтверждения создания пользовательского набора слов
+# Клавиатура для подтверждения создания пользовательского словаря
 confirm_create_set_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="Да, создать мой набор!", callback_data="create_my_word_set")],
+    [InlineKeyboardButton(text="Да, создать мой словарь!", callback_data="create_my_word_set")],
     [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_create_word_set")]
 ])
 
-# Клавиатура для управления пользовательским набором слов
+# Клавиатура для управления пользовательским словарём
 def get_my_set_keyboard(is_personal_set: bool = False, show_list_button_text: str = "📖 Показать список слов") -> InlineKeyboardMarkup:
     keyboard_buttons = []
 
     if is_personal_set:
         keyboard_buttons.append([InlineKeyboardButton(text="➕ Добавить слово", callback_data="add_my_word")])
         keyboard_buttons.append([InlineKeyboardButton(text="➖ Удалить слово", callback_data="del_my_word")])
-        keyboard_buttons.append([InlineKeyboardButton(text="🗑️ Удалить набор", callback_data="delete_my_word_set")])
+        keyboard_buttons.append([InlineKeyboardButton(text="🗑️ Удалить словарь", callback_data="delete_my_word_set")])
         keyboard_buttons.append([InlineKeyboardButton(text=show_list_button_text, callback_data="toggle_my_word_list")]) # Использование нового callback_data
     else:
         keyboard_buttons.append([InlineKeyboardButton(text=show_list_button_text, callback_data="toggle_my_word_list")]) # Использование нового callback_data
 
-    # Добавляем кнопку "Сменить набор" здесь
-    keyboard_buttons.append([InlineKeyboardButton(text="🔁 Сменить набор", callback_data="switch_my_set_inline")])
+    # Добавляем кнопку "Словарь" здесь
+    keyboard_buttons.append([InlineKeyboardButton(text="🔁 Словари", callback_data="switch_my_set_inline")])
     
-    keyboard_buttons.append([InlineKeyboardButton(text="⬆️ В главное меню", callback_data="back_to_main_from_my_set")])
+    keyboard_buttons.append([InlineKeyboardButton(text="✅ Готово", callback_data="back_to_main_from_my_set")])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
 
@@ -86,10 +86,11 @@ def create_file_selection_keyboard(available_files: list[str], current_file: str
     """Создает InlineKeyboardMarkup для выбора файлов со словами."""
     keyboard = []
     for file in available_files:
-        text = f"{file} ✅ (текущий)" if file == current_file else file
+        display_name = file.replace(".json", "")
+        text = f"{display_name} ✅" if file == current_file else display_name
         keyboard.append([InlineKeyboardButton(text=text, callback_data=f"select_file_{file}")])
     
-    keyboard.append([InlineKeyboardButton(text="⬆️ В главное меню", callback_data="back_to_main_from_my_set_select_file")])
+    keyboard.append([InlineKeyboardButton(text="✅ Подтвердить и закрыть", callback_data="back_to_main_from_my_set_select_file")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 # Клавиатура для отмены ввода имени файла при добавлении нового аудио
@@ -97,7 +98,7 @@ cancel_keyboard_for_filename = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_audio_upload")]
 ])
 
-# Клавиатура для подтверждения удаления пользовательского набора слов
+# Клавиатура для подтверждения удаления пользовательского словаря
 delete_my_set_confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Да, удалить", callback_data="confirm_delete_my_word_set")],
     [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_delete_my_word_set")]

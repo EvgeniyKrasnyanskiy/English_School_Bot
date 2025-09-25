@@ -64,17 +64,17 @@ async def send_guess_word_question(message: Message, state: FSMContext):
 
     if not words_with_audio:
         # No audio files found for any words in the set
-        no_audio_message = "Извините, для всех слов в выбранном наборе не найдены аудиофайлы. "
+        no_audio_message = "Извините, для всех слов в выбранном словаре не найдены аудиофайлы. "
         await message.answer(no_audio_message) # Send first part of the message
 
         if words_missing_audio_en:
             missing_words_list = "Отсутствуют аудиофайлы для следующих слов:\n" + '\n'.join(words_missing_audio_en) + "."
             await message.answer(missing_words_list +
-                                 "\n\nПожалуйста, выберите другую игру или смените набор слов." +
+                                 "\n\nПожалуйста, выберите другую игру или смените словарь." +
                                  "\n\nНо вы также можете поучавствовать в наполнении базы озвученных слов, используя команду /new_sound. Слово будет добавлено сразу после проверки администратором в течение суток.",
                                  reply_markup=main_menu_keyboard)
         else:
-            await message.answer("\n\nПожалуйста, выберите другую игру или смените набор слов." +
+            await message.answer("\n\nПожалуйста, выберите другую игру или смените словарь." +
                                  "\n\nНо вы также можете поучавствовать в наполнении базы озвученных слов, используя команду /new_sound. Слово будет добавлено сразу после проверки администратором в течение суток.",
                                  reply_markup=main_menu_keyboard)
         await state.clear()
@@ -82,7 +82,7 @@ async def send_guess_word_question(message: Message, state: FSMContext):
 
     # If there are words with missing audio, inform the user but proceed with available words
     if words_missing_audio_en:
-        missing_audio_list_message = ("Внимание! Для следующих слов из вашего набора отсутствуют аудиофайлы, поэтому они не будут использованы в этой игре:\n" +
+        missing_audio_list_message = ("Внимание! Для следующих слов из вашего словаря отсутствуют аудиофайлы, поэтому они не будут использованы в этой игре:\n" +
               '\n'.join(words_missing_audio_en) + "." +
               f"\n\nНо вы также можете поучавствовать в наполнении базы озвученных слов, используя команду /new_sound. Слово будет добавлено сразу после проверки администратором в течение суток.")
  

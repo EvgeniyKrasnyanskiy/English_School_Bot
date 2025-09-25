@@ -104,12 +104,12 @@ async def show_statistics_handler(message: Message, state: FSMContext, bot: Bot)
         f"   Лучшее время теста: `{best_test_time_display}`\n\n"
     )
 
-    # === Статистика по тестам для каждого набора слов ===
+    # === Статистика по тестам для каждого словаря ===
     test_stats_by_set = await get_test_stats_by_word_set(user_id)
     if test_stats_by_set:
-        stats_text += "📝 Статистика тестов по наборам слов:\n"
+        stats_text += "📝 Статистика тестов по словарям:\n"
         for word_set, stats in test_stats_by_set.items():
-            # Убрана замена "default" на "Стандартный набор", теперь всегда отображается точное имя файла
+            # Убрана замена "default" на "Стандартный словарь", теперь всегда отображается точное имя файла
             display_word_set = word_set 
             
             total_tests = stats.get("total_tests", 0)
@@ -127,15 +127,15 @@ async def show_statistics_handler(message: Message, state: FSMContext, bot: Bot)
             stats_text += f"    • Тестов пройдено: {total_tests}\n"
             stats_text += f"    • Общий счет: {total_score} из {total_possible_score} ({accuracy:.2f}%)\n"
             stats_text += f"    • Лучший результат: {best_score}\n"
-        stats_text += "\n" # Добавляем пустую строку после статистики тестов по наборам
+        stats_text += "\n" # Добавляем пустую строку после статистики тестов по словарям
 
 
     stats_text += "🎮 *Игры:*\n"
-    # === Статистика по играм для каждого набора слов (для пользователя) ===
+    # === Статистика по играм для каждого словаря (для пользователя) ===
     game_stats_by_set = await get_game_stats_by_word_set(user_id)
     if game_stats_by_set:
         for word_set, games in game_stats_by_set.items():
-            # Убрана замена "default" на "Стандартный набор", теперь всегда отображается точное имя файла
+            # Убрана замена "default" на "Стандартный словарь", теперь всегда отображается точное имя файла
             display_word_set = word_set 
             
             stats_text += f"  └ 📁 `{display_word_set}`:\n"
@@ -152,7 +152,7 @@ async def show_statistics_handler(message: Message, state: FSMContext, bot: Bot)
                     game_type, game_type.replace("_", " ").title()
                 )
                 stats_text += f"    • {translated_game_name}: Всего: {played}, Верно: {correct}, Неверно: {incorrect}{best_time_str}\n"
-        stats_text += "\n" # Добавляем пустую строку после статистики игр по наборам
+        stats_text += "\n" # Добавляем пустую строку после статистики игр по словарям
 
 
     await message.answer(stats_text, reply_markup=main_menu_keyboard, parse_mode="Markdown")

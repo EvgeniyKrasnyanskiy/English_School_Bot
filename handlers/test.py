@@ -38,12 +38,12 @@ async def start_test(message: Message, state: FSMContext, bot: Bot):
     num_questions = min(len(words), TEST_QUESTIONS_COUNT)
 
     if not words:
-        await message.answer("В выбранном наборе слов нет слов для проведения теста. Пожалуйста, выберите другой набор или добавьте слова.", reply_markup=main_menu_keyboard)
+        await message.answer("В выбранном словаре нет слов для проведения теста. Пожалуйста, выберите другой словарь или добавьте слова.", reply_markup=main_menu_keyboard)
         await state.clear()
         return
 
     if num_questions == 0:
-        await message.answer("В выбранном наборе слов недостаточно слов для проведения теста. Пожалуйста, выберите другой набор или добавьте слова.", reply_markup=main_menu_keyboard)
+        await message.answer("В выбранном словаре недостаточно слов для проведения теста. Пожалуйста, выберите другой словарь или добавьте слова.", reply_markup=main_menu_keyboard)
         await state.clear()
         return
 
@@ -61,7 +61,7 @@ async def start_test(message: Message, state: FSMContext, bot: Bot):
     
     await message.answer("Результаты вашего теста будут отображаться в статистике только после его завершения!")
     current_word_set_name = word_manager.get_user_current_file(int(user_id))
-    await message.answer(f"Начинаем тест! Ответьте на {num_questions} вопросов из набора '{current_word_set_name}' в котором {len(words)} слов.")
+    await message.answer(f"Начинаем тест! Ответьте на {num_questions} вопросов из словаря '{current_word_set_name}' в котором {len(words)} слов.")
     await send_test_question(message, state)
 
 async def send_test_question(message: Message, state: FSMContext):

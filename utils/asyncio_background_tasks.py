@@ -33,7 +33,9 @@ async def check_new_audio_for_admin_notification(bot: Bot):
     Checks daily at 12 PM for new audio files in data/sounds/mp3 and notifies admin if CHECK_NEW_AUDIO is True.
     """
     mp3_dir = os.path.join("data", "sounds", "mp3") # Изменено на data/sounds/mp3
+    ogg_dir = os.path.join("data", "sounds", "ogg")
     os.makedirs(mp3_dir, exist_ok=True) # Ensure directory exists
+    os.makedirs(ogg_dir, exist_ok=True) # Ensure directory exists
 
     while True:
         now = datetime.datetime.now()
@@ -43,21 +45,26 @@ async def check_new_audio_for_admin_notification(bot: Bot):
             next_run += datetime.timedelta(days=1)
         
         wait_seconds = (next_run - now).total_seconds()
-        print(f"Следующая проверка папки mp3 запланирована на {next_run}. Ожидание {wait_seconds:.0f} секунд.")
+        print(f"Следующая проверка аудиофайлов (mp3 и ogg) запланирована на {next_run}. Ожидание {wait_seconds:.0f} секунд.")
         await asyncio.sleep(wait_seconds)
 
-        now = datetime.datetime.now() # Update `now` after sleep
+        # now = datetime.datetime.now() # Update `now` after sleep
         
         if not config.CHECK_NEW_AUDIO:
-            print("Проверка папки data/sounds/mp3 отключена в config.py.")
+            print("Проверка новых аудиофайлов отключена в config.py.")
+            # await asyncio.sleep(60) # Короткая задержка, чтобы не забивать логи, если проверка отключена
             continue
 
-        audio_files = [f for f in os.listdir(mp3_dir) if os.path.isfile(os.path.join(mp3_dir, f))]
+        mp3_audio_files = [f for f in os.listdir(mp3_dir) if os.path.isfile(os.path.join(mp3_dir, f))]
+        ogg_audio_files = [f for f in os.listdir(ogg_dir) if os.path.isfile(os.path.join(ogg_dir, f))]
         
-        if audio_files:
-            count = len(audio_files)
-            admin_message = f"В папке `data/sounds/mp3` обнаружено {count} новых аудиофайлов, требующих внимания."\
-                            f"\n\nИмена файлов: {', '.join(audio_files)}"
+        all_new_audio_files = mp3_audio_files + ogg_audio_files
+
+        if all_new_audio_files:
+            count = len(all_new_audio_files)
+            admin_message = f"Обнаружено {count} новых аудиофайлов, требующих внимания (в папках `data/sounds/mp3` и `data/sounds/ogg`)."\
+                            f"\n\nMP3 файлы: {', '.join(mp3_audio_files) if mp3_audio_files else 'нет'}"\
+                            f"\nOGG файлы: {', '.join(ogg_audio_files) if ogg_audio_files else 'нет'}"
             for admin_id in config.ADMIN_IDS:
                 try:
                     await bot.send_message(admin_id, admin_message, parse_mode="Markdown")
@@ -65,7 +72,7 @@ async def check_new_audio_for_admin_notification(bot: Bot):
                 except Exception as e:
                     print(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
         else:
-            print("В папке data/sounds/mp3 новых аудиофайлов не найдено.")
+            print("В папках data/sounds/mp3 и data/sounds/ogg новых аудиофайлов не найдено.")
 
 async def start_background_tasks(bot: Bot):
     asyncio.create_task(check_and_rotate_logs())

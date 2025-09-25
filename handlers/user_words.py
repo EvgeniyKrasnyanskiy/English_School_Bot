@@ -26,6 +26,7 @@ class UserWordStates(StatesGroup):
     waiting_for_del_word = State()
     waiting_for_delete_confirm = State()
     word_list_visible = State() # New state to track word list visibility
+    waiting_for_file_selection = State() # New state for file selection
 
 
 router = Router()
@@ -41,11 +42,11 @@ async def _get_user_display_name(user_id: int) -> str:
 async def my_word_set_command(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if user_id in await get_banned_users():
-        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.")
+        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских словарей.")
         return
     user_display_name = await _get_user_display_name(user_id)
     
-    # Определяем базовое имя файла для пользовательского набора (без динамического суффикса и расширения)
+    # Определяем базовое имя файла для пользовательского словаря (без динамического суффикса и расширения)
     expected_custom_filename_base = word_manager.get_user_custom_filename(user_id, user_display_name)
     
     # Ищем файлы, которые начинаются с этого базового имени
@@ -57,10 +58,10 @@ async def my_word_set_command(message: Message, state: FSMContext):
     await state.update_data(word_list_visible=False) # Initialize word list visibility
 
     if has_personal_set:
-        # Если есть несколько личных наборов, выберем первый (можно добавить логику выбора новейшего)
+        # Если есть несколько личных словарей, выберем первый (можно добавить логику выбора новейшего)
         selected_personal_file = available_personal_files[0]
         
-        # Если текущий файл пользователя не его личный набор, автоматически переключаем на него
+        # Если текущий файл пользователя не его личный словарь, автоматически переключаем на него
         if current_user_file != selected_personal_file:
             word_manager.set_user_current_file(user_id, selected_personal_file, user_display_name)
             current_user_file = selected_personal_file # Обновляем для дальнейшего использования
@@ -71,14 +72,14 @@ async def my_word_set_command(message: Message, state: FSMContext):
         if info:
             words = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, "words", current_user_file))
             
-            message_text = f"📁 <b>Ваш личный набор слов:</b> {html.escape(current_user_file)}\n"
+            message_text = f"📁 <b>Ваш личный словарь:</b> {html.escape(current_user_file)}\n"
             message_text += f"📊 Количество слов: {info['word_count']} / {MAX_USER_WORDS}\n"
             message_text += f"⚠️ Примечание: Для этих слов могут отсутствовать картинки и аудио.\n\n"
     
             if words:
                 message_text += "\nВыберите действие:"
             else:
-                message_text += "Ваш личный набор слов пуст. Добавьте слова с помощью кнопки '➕ Добавить слово'.\n\n"
+                message_text += "Ваш личный словарь пуст. Добавьте слова с помощью кнопки '➕ Добавить слово'.\n\n"
                 message_text += "\nВыберите действие:"
             
             await message.answer(
@@ -89,16 +90,16 @@ async def my_word_set_command(message: Message, state: FSMContext):
         else:
             # Если файл существует, но информация не получена (поврежден), предлагаем создать новый
             await message.answer(
-                "Не удалось получить информацию о вашем личном наборе слов. Возможно, файл поврежден. "
-                "Пожалуйста, попробуйте создать новый набор или свяжитесь с администратором.",
+                "Не удалось получить информацию о вашем личном словаре. Возможно, файл поврежден. "
+                "Пожалуйста, попробуйте создать новый словарь или свяжитесь с администратором.",
                 reply_markup=main_menu_keyboard
             )
             await state.clear()
     else:
-        # Предлагаем создать новый набор, так как личного набора нет
+        # Предлагаем создать новый словарь, так как личного словаря нет
         await message.answer(
-            f"У вас пока нет личного набора слов. Вы хотите создать его?\n"
-            f"Ваш набор будет назван: <b>{html.escape(word_manager.get_user_custom_filename(user_id, user_display_name))}*****.json</b>\n"
+            f"У вас пока нет личного словаря. Вы хотите создать его?\n"
+            f"Ваш словарь будет назван: <b>{html.escape(word_manager.get_user_custom_filename(user_id, user_display_name))}*****.json</b>\n"
             f"Где ***** - случайные символы.",
             parse_mode="HTML",
             reply_markup=confirm_create_set_keyboard
@@ -109,7 +110,7 @@ async def my_word_set_command(message: Message, state: FSMContext):
 @router.callback_query(F.data == "create_my_word_set", UserWordStates.waiting_for_create_confirm)
 async def create_my_word_set(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id in await get_banned_users():
-        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских словарей.", show_alert=True)
         await state.clear()
         return
     await callback.answer()
@@ -125,8 +126,8 @@ async def create_my_word_set(callback: CallbackQuery, state: FSMContext):
         # После создания сразу показываем пустой список слов и кнопки управления
         await state.update_data(word_list_visible=False) # Initialize word list visibility
         await callback.message.edit_text(
-            f"✅ Ваш личный набор слов <b>{html.escape(created_filename)}</b> успешно создан!\n"
-            f"Ваш набор слов пуст ({0} / {MAX_USER_WORDS}). Добавьте слова с помощью кнопки '➕ Добавить слово'.\n\n"
+            f"✅ Ваш личный словарь <b>{html.escape(created_filename)}</b> успешно создан!\n"
+            f"Ваш словарь пуст ({0} / {MAX_USER_WORDS}). Добавьте слова с помощью кнопки '➕ Добавить слово'.\n\n"
             f"⚠️ Примечание: Для этих слов могут отсутствовать картинки и аудио.\n\n"
             f"Выберите действие:",
             parse_mode="HTML",
@@ -134,7 +135,7 @@ async def create_my_word_set(callback: CallbackQuery, state: FSMContext):
         )
     else:
         await callback.message.edit_text(
-            "❌ Не удалось создать ваш личный набор слов. Возможно, он уже существует или произошла ошибка.",
+            "❌ Не удалось создать ваш личный словарь. Возможно, он уже существует или произошла ошибка.",
             reply_markup=None # Убираем reply_markup из edit_text
         )
         await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
@@ -144,16 +145,25 @@ async def create_my_word_set(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "back_to_main_from_my_set")
 async def back_to_main_from_my_set_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+    current_file = word_manager.get_user_current_file(callback.from_user.id)
+    message_text = f"Вы вышли из режима выбора словаря. Текущий словарь - '{current_file.replace('.json', '')}'."
     await state.clear()
-    await callback.message.edit_text("Возвращаемся в главное меню.", reply_markup=None)
-    await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+    try:
+        # Удаляем сообщение с Inline-клавиатурой
+        await callback.message.delete()
+        # Отправляем новое сообщение с ReplyKeyboardMarkup
+        await callback.message.answer(message_text, reply_markup=main_menu_keyboard)
+    except TelegramBadRequest as e:
+        logger.warning(f"[back_to_main_from_my_set_callback] TelegramBadRequest when deleting/answering message: {e}")
+        # Если удаление не удалось, просто отправляем новое сообщение
+        await callback.message.answer(message_text, reply_markup=main_menu_keyboard)
 
 
 @router.callback_query(F.data == "cancel_create_word_set", UserWordStates.waiting_for_create_confirm)
 async def cancel_create_word_set(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
-    await callback.message.edit_text("Создание набора слов отменено.", reply_markup=None)
+    await callback.message.edit_text("Создание словаря отменено.", reply_markup=None)
 
 
 # Удаляем старый обработчик для команды /my_list, так как его функционал теперь в /my_set
@@ -165,7 +175,7 @@ async def cancel_create_word_set(callback: CallbackQuery, state: FSMContext):
 
 #     if not os.path.exists(os.path.join(word_manager.data_dir, custom_filename)):
 #         await message.answer(
-#             "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала.",
+#             "У вас нет личного словаря. Создайте его с помощью команды /my_set сначала.",
 #             reply_markup=main_menu_keyboard
 #         )
 #         await state.clear()
@@ -174,20 +184,20 @@ async def cancel_create_word_set(callback: CallbackQuery, state: FSMContext):
 #     words = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, custom_filename))
 #     if not words:
 #         await message.answer(
-#             "Ваш личный набор слов пуст. Добавьте слова с помощью команды /add_my_word.",
+#             "Ваш личный словарь пуст. Добавьте слова с помощью команды /add_my_word.",
 #             reply_markup=main_menu_keyboard
 #         )
 #         await state.clear()
 #         return
 
-#     word_list_text = f"📁 <b>Ваш личный набор слов ({len(words)}):</b>\n\n"
+#     word_list_text = f"📁 <b>Ваш личный словарь ({len(words)}):</b>\n\n"
 #     for word_pair in words:
 #         word_list_text += f"  • <code>{html.escape(word_pair['en'])} = {html.escape(word_pair['ru'])}</code>\n"
     
 #     await message.answer(
 #         word_list_text,
 #         parse_mode="HTML",
-#         reply_markup=my_set_keyboard # Возвращаем клавиатуру управления личным набором
+#         reply_markup=my_set_keyboard # Возвращаем клавиатуру управления личным словарём
 #     )
 #     await state.clear()
 
@@ -195,7 +205,7 @@ async def cancel_create_word_set(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "add_my_word")
 async def add_my_word_command(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id in await get_banned_users():
-        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских словарей.", show_alert=True)
         await state.clear()
         return
     await callback.answer()
@@ -207,7 +217,7 @@ async def add_my_word_command(callback: CallbackQuery, state: FSMContext):
 
     if not os.path.exists(current_file_path) or current_user_file == "all_words.json":
         await callback.message.edit_text(
-            "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала."
+            "У вас нет личного словаря. Создайте его с помощью команды /my_set сначала."
         )
         await callback.message.answer(
             "Возвращаемся в главное меню.",
@@ -218,7 +228,7 @@ async def add_my_word_command(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text(
         f"Пожалуйста, отправьте английское слово и его русский перевод в формате: <code>английское_слово=русский_перевод</code>\n"
-        f"(Максимум слов в наборе: {MAX_USER_WORDS})",
+        f"(Максимум слов в словаре: {MAX_USER_WORDS})",
         parse_mode="HTML",
         reply_markup=cancel_add_del_keyboard
     )
@@ -229,7 +239,7 @@ async def add_my_word_command(callback: CallbackQuery, state: FSMContext):
 async def process_add_my_word(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if user_id in await get_banned_users():
-        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.")
+        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских словарей.")
         await state.clear()
         return
     current_user_file = word_manager.get_user_current_file(user_id) # Получаем текущий активный файл пользователя
@@ -239,7 +249,7 @@ async def process_add_my_word(message: Message, state: FSMContext):
 
     if not os.path.exists(current_file_path) or current_user_file == "all_words.json":
         await message.answer(
-            "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала.",
+            "У вас нет личного словаря. Создайте его с помощью команды /my_set сначала.",
             reply_markup=main_menu_keyboard
         )
         await state.clear()
@@ -252,7 +262,7 @@ async def process_add_my_word(message: Message, state: FSMContext):
         word_list_visible = state_data.get("word_list_visible", False)
         show_list_button_text = "Скрыть список слов" if word_list_visible else "📖 Показать список слов"
         await message.answer(
-            f"❌ Вы достигли максимального количества слов ({MAX_USER_WORDS}) в вашем личном наборе. "
+            f"❌ Вы достигли максимального количества слов ({MAX_USER_WORDS}) в вашем личном словаре. "
             "Пожалуйста, удалите некоторые слова, прежде чем добавлять новые.",
             parse_mode="HTML",
             reply_markup=get_my_set_keyboard(is_personal_set=True, show_list_button_text=show_list_button_text)
@@ -297,7 +307,7 @@ async def process_add_my_word(message: Message, state: FSMContext):
         word_list_visible = state_data.get("word_list_visible", False)
         show_list_button_text = "Скрыть список слов" if word_list_visible else "📖 Показать список слов"
         await message.answer(
-            f"✅ Слово <code>{html.escape(en_word)}={html.escape(ru_word)}</code> успешно добавлено в ваш личный набор!\n"
+            f"✅ Слово <code>{html.escape(en_word)}={html.escape(ru_word)}</code> успешно добавлено в ваш личный словарь!\n"
             "⚠️ Примечание: Для этого слова могут отсутствовать картинки и аудио.",
             parse_mode="HTML",
             reply_markup=get_my_set_keyboard(is_personal_set=True, show_list_button_text=show_list_button_text)
@@ -317,7 +327,7 @@ async def process_add_my_word(message: Message, state: FSMContext):
 @router.callback_query(F.data == "del_my_word")
 async def del_my_word_command(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id in await get_banned_users():
-        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских словарей.", show_alert=True)
         await state.clear()
         return
     await callback.answer()
@@ -329,14 +339,14 @@ async def del_my_word_command(callback: CallbackQuery, state: FSMContext):
 
     if not os.path.exists(current_file_path) or current_user_file == "all_words.json":
         await callback.message.edit_text(
-            "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала.",
+            "У вас нет личного словаря. Создайте его с помощью команды /my_set сначала.",
             reply_markup=main_menu_keyboard
         )
         await state.clear()
         return
 
     await callback.message.edit_text(
-        "Пожалуйста, отправьте английское слово, которое вы хотите удалить из вашего набора.",
+        "Пожалуйста, отправьте английское слово, которое вы хотите удалить из вашего словаря.",
         reply_markup=cancel_add_del_keyboard
     )
     await state.set_state(UserWordStates.waiting_for_del_word)
@@ -346,7 +356,7 @@ async def del_my_word_command(callback: CallbackQuery, state: FSMContext):
 async def process_del_my_word(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if user_id in await get_banned_users():
-        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.")
+        await message.reply("Вы заблокированы и не можете использовать функционал пользовательских словарей.")
         await state.clear()
         return
     current_user_file = word_manager.get_user_current_file(user_id) # Получаем текущий активный файл пользователя
@@ -356,7 +366,7 @@ async def process_del_my_word(message: Message, state: FSMContext):
 
     if not os.path.exists(current_file_path) or current_user_file == "all_words.json":
         await message.answer(
-            "У вас нет личного набора слов. Создайте его с помощью команды /my_set сначала.",
+            "У вас нет личного словаря. Создайте его с помощью команды /my_set сначала.",
             reply_markup=main_menu_keyboard
         )
         await state.clear()
@@ -376,7 +386,7 @@ async def process_del_my_word(message: Message, state: FSMContext):
         word_list_visible = state_data.get("word_list_visible", False)
         show_list_button_text = "Скрыть список слов" if word_list_visible else "📖 Показать список слов"
         await message.answer(
-            f"✅ Слово <code>{html.escape(en_word_to_delete)}</code> успешно удалено из вашего личного набора.",
+            f"✅ Слово <code>{html.escape(en_word_to_delete)}</code> успешно удалено из вашего личного словаря.",
             parse_mode="HTML",
             reply_markup=get_my_set_keyboard(is_personal_set=True, show_list_button_text=show_list_button_text)
         )
@@ -385,7 +395,7 @@ async def process_del_my_word(message: Message, state: FSMContext):
         word_list_visible = state_data.get("word_list_visible", False)
         show_list_button_text = "Скрыть список слов" if word_list_visible else "📖 Показать список слов"
         await message.answer(
-            f"❌ Слово <code>{html.escape(en_word_to_delete)}</code> не найдено в вашем наборе или произошла ошибка.",
+            f"❌ Слово <code>{html.escape(en_word_to_delete)}</code> не найдено в вашем словаре или произошла ошибка.",
             parse_mode="HTML",
             reply_markup=get_my_set_keyboard(is_personal_set=True, show_list_button_text=show_list_button_text)
         )
@@ -395,7 +405,7 @@ async def process_del_my_word(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("select_file_"))
 async def process_select_file(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id in await get_banned_users():
-        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских словарей.", show_alert=True)
         await state.clear()
         return
     await callback.answer()
@@ -410,7 +420,7 @@ async def process_select_file(callback: CallbackQuery, state: FSMContext):
         info = word_manager.get_file_info(selected_filename)
         words_in_file = word_manager.load_words_from_file(os.path.join(word_manager.data_dir, "words", selected_filename))
         
-        message_text = f"📁 <b>{'Ваш личный набор слов:' if is_personal_set else 'Набор слов:'}</b> {html.escape(selected_filename)}\n"
+        message_text = f"📁 <b>{'Ваш личный словарь:' if is_personal_set else 'Словарь:'}</b> {html.escape(selected_filename)}\n"
         message_text += f"📊 Количество слов: {len(words_in_file)}{f' / {MAX_USER_WORDS}' if is_personal_set else ''}\n"
         message_text += f"⚠️ Примечание: Для этих слов могут отсутствовать картинки и аудио.\n\n"
         message_text += "\nВыберите действие:"
@@ -435,26 +445,48 @@ async def process_select_file(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "back_to_main_from_my_set_select_file")
 async def back_to_main_from_my_set_select_file_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+    current_file = word_manager.get_user_current_file(callback.from_user.id)
+    message_text = f"Вы вышли из режима выбора словаря. Текущий словарь - '{current_file.replace('.json', '')}'."
     await state.clear()
     try:
-        await callback.message.edit_text("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+        # Удаляем сообщение с Inline-клавиатурой, так как ReplyKeyboardMarkup не может быть отредактирована
+        await callback.message.delete()
+        # Отправляем новое сообщение с ReplyKeyboardMarkup
+        await callback.message.answer(message_text, reply_markup=main_menu_keyboard)
     except TelegramBadRequest as e:
-        logger.warning(f"[back_to_main_from_my_set_select_file_callback] TelegramBadRequest when editing message: {e}")
-        await callback.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+        logger.warning(f"[back_to_main_from_my_set_select_file_callback] TelegramBadRequest when deleting/answering message: {e}")
+        # Если удаление не удалось, просто отправляем новое сообщение
+        await callback.message.answer(message_text, reply_markup=main_menu_keyboard)
 
 
 @router.callback_query(F.data == "switch_my_set_inline")
 async def switch_my_set_inline_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+    await state.set_state(UserWordStates.waiting_for_file_selection) # Устанавливаем состояние выбора файла
     # Передаем callback.message в качестве объекта сообщения
     await _send_file_selection_menu_helper(callback.message, state, callback.from_user.id)
+
+
+# Новый обработчик для кнопки "В главное меню" в режиме выбора файла
+@router.message(F.text == "⬆️ В главное меню", UserWordStates.waiting_for_file_selection)
+async def back_to_main_from_file_selection(message: Message, state: FSMContext):
+    await state.clear()
+    try:
+        # Удаляем сообщение с Inline-клавиатурой, так как ReplyKeyboardMarkup не может быть отредактирована
+        await message.delete()
+        # Отправляем новое сообщение с ReplyKeyboardMarkup
+        await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
+    except TelegramBadRequest as e:
+        logger.warning(f"[back_to_main_from_file_selection] TelegramBadRequest when deleting/answering message: {e}")
+        # Если удаление не удалось, просто отправляем новое сообщение
+        await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_keyboard)
 
 
 # @router.message(Command("list")) # Обновленный обработчик команды /list
 # async def list_user_words_command(message: Message, state: FSMContext):
 #     user_id = message.from_user.id
 #     if user_id in await get_banned_users():
-#         await message.reply("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.")
+#         await message.reply("Вы заблокированы и не можете использовать функционал пользовательских словарей.")
 #         return
     
 #     parts = message.text.split(maxsplit=1)
@@ -497,7 +529,7 @@ async def switch_my_set_inline_callback(callback: CallbackQuery, state: FSMConte
 @router.callback_query(F.data == "toggle_my_word_list") # Измененный callback_data
 async def toggle_my_word_list_callback(callback: CallbackQuery, state: FSMContext, bot: Bot): # Pass bot instance
     if callback.from_user.id in await get_banned_users():
-        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских словарей.", show_alert=True)
         await state.clear()
         return
     await callback.answer()
@@ -514,7 +546,7 @@ async def toggle_my_word_list_callback(callback: CallbackQuery, state: FSMContex
     previous_message_ids = state_data.get("word_list_message_ids", [])
 
     # Define the core prefix that appears on every message part
-    core_message_prefix = f"📁 <b>{'Ваш личный набор слов:' if is_personal_set else 'Набор слов:'}</b> {html.escape(current_file)}\n"
+    core_message_prefix = f"📁 <b>{'Ваш личный словарь:' if is_personal_set else 'Словарь:'}</b> {html.escape(current_file)}\n"
     word_count_str = str(len(word_manager.load_words_from_file(os.path.join(word_manager.data_dir, 'words', current_file))))
     if is_personal_set:
         word_count_str += f" / {MAX_USER_WORDS}"
@@ -576,7 +608,7 @@ async def toggle_my_word_list_callback(callback: CallbackQuery, state: FSMContex
             icon_str = "".join(icons)
             message_text_content += f"  •<code>{html.escape(word_pair['en'])} = {html.escape(word_pair['ru'])}</code>{icon_str}\n"
     else:
-        message_text_content = f"{'Ваш личный набор слов' if is_personal_set else 'Набор слов'} <code>{html.escape(current_file)}</code> пуст. "
+        message_text_content = f"{'Ваш личный словарь' if is_personal_set else 'Словарь'} <code>{html.escape(current_file)}</code> пуст. "
         if is_personal_set:
             message_text_content += 'Добавьте слова с помощью кнопки "➕ Добавить слово".'
         message_text_content += "\n"
@@ -659,13 +691,13 @@ async def _send_file_selection_menu_helper(message: Message, state: FSMContext, 
     keyboard = create_file_selection_keyboard(available_files, current_file)
     try:
         await message.edit_text(
-            "Выберите набор слов для изучения либо нажмите на уже выбранный набор для просмотра списка слов в нём:",
+            "Выберите словарь для изучения либо нажмите на уже выбранный словарь для просмотра списка слов в нём. По окончании выбора нажмите '✅ Подтвердить и закрыть' или кнопку '✅ Готово'",
             reply_markup=keyboard
         )
     except TelegramBadRequest as e:
         logger.warning(f"[_send_file_selection_menu_helper] TelegramBadRequest when editing message: {e}")
         await message.answer(
-            "Выберите набор слов для изучения либо нажмите на уже выбранный набор для просмотра списка слов в нём:",
+            "Выберите словарь для изучения либо нажмите на уже выбранный словарь для просмотра списка слов в нём. По окончании выбора нажмите '✅ Подтвердить и закрыть' или кнопку '✅ Готово'",
             reply_markup=keyboard
         )
 
@@ -673,7 +705,7 @@ async def _send_file_selection_menu_helper(message: Message, state: FSMContext, 
 @router.callback_query(F.data == "delete_my_word_set")
 async def delete_my_word_set_command(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id in await get_banned_users():
-        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских словарей.", show_alert=True)
         await state.clear()
         return
     await callback.answer()
@@ -682,14 +714,14 @@ async def delete_my_word_set_command(callback: CallbackQuery, state: FSMContext)
 
     if current_user_file == "all_words.json":
         await callback.message.edit_text(
-            "Вы не можете удалить основной набор слов.",
+            "Вы не можете удалить основной словарь.",
             reply_markup=get_my_set_keyboard(is_personal_set=False)
         )
         await state.clear()
         return
 
     await callback.message.edit_text(
-        f"Вы уверены, что хотите удалить свой личный набор слов <b>{html.escape(current_user_file)}</b>? Это действие нельзя отменить.",
+        f"Вы уверены, что хотите удалить свой личный словарь <b>{html.escape(current_user_file)}</b>? Это действие нельзя отменить.",
         parse_mode="HTML",
         reply_markup=delete_my_set_confirm_keyboard
     )
@@ -699,7 +731,7 @@ async def delete_my_word_set_command(callback: CallbackQuery, state: FSMContext)
 @router.callback_query(F.data == "confirm_delete_my_word_set", UserWordStates.waiting_for_delete_confirm)
 async def confirm_delete_my_word_set(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id in await get_banned_users():
-        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских словарей.", show_alert=True)
         await state.clear()
         return
     await callback.answer()
@@ -712,7 +744,7 @@ async def confirm_delete_my_word_set(callback: CallbackQuery, state: FSMContext)
         word_list_visible = state_data.get("word_list_visible", False)
         show_list_button_text = "Скрыть список слов" if word_list_visible else "📖 Показать список слов"
         await callback.message.edit_text(
-            "Невозможно удалить основной набор слов.",
+            "Невозможно удалить основной словарь.",
             reply_markup=get_my_set_keyboard(is_personal_set=False, show_list_button_text=show_list_button_text)
         )
         await state.clear()
@@ -722,7 +754,7 @@ async def confirm_delete_my_word_set(callback: CallbackQuery, state: FSMContext)
         # Сбрасываем текущий файл пользователя на дефолтный
         word_manager.set_user_current_file(user_id, "all_words.json", user_display_name) # Pass user_display_name
         await callback.message.edit_text(
-            f"✅ Ваш личный набор слов <b>{html.escape(current_user_file)}</b> успешно удален.",
+            f"✅ Ваш личный словарь <b>{html.escape(current_user_file)}</b> успешно удален.",
             parse_mode="HTML"
         )
     else:
@@ -730,7 +762,7 @@ async def confirm_delete_my_word_set(callback: CallbackQuery, state: FSMContext)
         word_list_visible = state_data.get("word_list_visible", False)
         show_list_button_text = "Скрыть список слов" if word_list_visible else "📖 Показать список слов"
         await callback.message.edit_text(
-            f"❌ Не удалось удалить набор слов <b>{html.escape(current_user_file)}</b>. Возможно, файл не существует или произошла ошибка.",
+            f"❌ Не удалось удалить словарь <b>{html.escape(current_user_file)}</b>. Возможно, файл не существует или произошла ошибка.",
             parse_mode="HTML",
             reply_markup=get_my_set_keyboard(is_personal_set=False, show_list_button_text=show_list_button_text)
         )
@@ -741,13 +773,13 @@ async def confirm_delete_my_word_set(callback: CallbackQuery, state: FSMContext)
 async def cancel_delete_my_word_set(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
-    await callback.message.edit_text("Удаление набора слов отменено.", reply_markup=None)
+    await callback.message.edit_text("Удаление словаря отменено.", reply_markup=None)
 
 
 @router.callback_query(F.data == "cancel_add_del_word", StateFilter(UserWordStates.waiting_for_add_word, UserWordStates.waiting_for_del_word))
 async def cancel_add_del_word_action(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id in await get_banned_users():
-        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских наборов слов.", show_alert=True)
+        await callback.answer("Вы заблокированы и не можете использовать функционал пользовательских словарей.", show_alert=True)
         await state.clear()
         return
     await callback.answer()
@@ -756,4 +788,4 @@ async def cancel_add_del_word_action(callback: CallbackQuery, state: FSMContext)
     state_data = await state.get_data()
     word_list_visible = state_data.get("word_list_visible", False)
     show_list_button_text = "Скрыть список слов" if word_list_visible else "📖 Показать список слов"
-    await callback.message.answer("Возвращаемся в меню управления набором слов.", reply_markup=get_my_set_keyboard(is_personal_set=True, show_list_button_text=show_list_button_text))
+    await callback.message.answer("Возвращаемся в меню управления словарём.", reply_markup=get_my_set_keyboard(is_personal_set=True, show_list_button_text=show_list_button_text))

@@ -206,7 +206,7 @@ class WordManager:
         return f"{random_letters}{date_suffix}"
 
     def get_user_custom_filename(self, user_id: int, user_display_name: str) -> str:
-        """Генерирует стабильную базовую часть имени файла для пользовательского набора слов."""
+        """Генерирует стабильную базовую часть имени файла для пользовательского словаря."""
         # Извлекаем первые 3 буквы из имени пользователя, или 'lst' если нет букв
         alpha_chars = ''.join(filter(str.isalpha, user_display_name)).lower()
         prefix = (alpha_chars[:3] if len(alpha_chars) >= 3 else "lst").ljust(3, 'l') # Ensure prefix is 3 chars

@@ -134,6 +134,6 @@ async def back_to_main_from_learn(message: Message, state: FSMContext, bot: Bot)
     await state.clear() # Перемещено в конец после очистки аудио
     await message.answer("Вы вернулись в главное меню.", reply_markup=main_menu_keyboard)
 
-@router.message(F.text == "🔁 Сменить набор")
+@router.message(F.text == "🔁 Словари")
 async def switch_set_via_button(message: Message, state: FSMContext):
-    await _send_file_selection_menu_helper(message, state, message.from_user.id) # Вызываем новую функцию для смены набора и передаем user_id
+    await _send_file_selection_menu_helper(message, state, message.from_user.id) # Вызываем новую функцию для смены словаря и передаем user_id
