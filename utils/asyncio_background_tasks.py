@@ -4,7 +4,7 @@ import os
 from utils.log_archiver import rotate_logs_monthly
 import config
 from aiogram import Bot # Импортируем Bot для отправки сообщений
-import aioschedule as schedule # Импортируем aioschedule
+# import aioschedule as schedule # Удаляем aioschedule
 from database import reset_all_user_statistics # Импортируем функцию сброса статистики
 
 async def check_and_rotate_logs():
@@ -76,16 +76,6 @@ async def check_new_audio_for_admin_notification(bot: Bot):
         else:
             print("В папках data/sounds/mp3 и data/sounds/ogg новых аудиофайлов не найдено.")
 
-async def schedule_monthly_reset(bot: Bot):
-    """
-    Schedules monthly reset of user statistics.
-    """
-    if config.AUTO_RESET_STATS_MONTHLY:
-        print("Ежемесячный автосброс статистики включен. Планирую сброс на 1 число каждого месяца в 00:01.")
-        schedule.every().day.at("00:01").do(reset_all_user_statistics_task, bot) # Изменено на every().day
-    else:
-        print("Ежемесячный автосброс статистики отключен.")
-
 async def reset_all_user_statistics_task(bot: Bot):
     # Проверяем, что сегодня 1-е число месяца
     if datetime.datetime.now().day != 1:
@@ -108,13 +98,53 @@ async def reset_all_user_statistics_task(bot: Bot):
         except Exception as e:
             print(f"Не удалось отправить сообщение администратору {admin_id}: {e}")
 
-async def run_scheduler():
+async def monthly_reset_loop(bot: Bot):
+    """
+    Custom loop to schedule monthly reset of user statistics on the 1st of every month at 00:01.
+    """
     while True:
-        await schedule.run_pending() # Добавлено await
-        await asyncio.sleep(1) # Проверяем расписание каждую секунду
+        now = datetime.datetime.now()
+        # Определяем целевое время (00:00 1-го числа следующего месяца)
+        if now.day < 1:
+            # Если сегодня до 1-го числа, то это 1-е число текущего месяца
+            target_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            # Если сегодня 1-е число или после, то это 1-е число следующего месяца
+            # Вычисляем первое число следующего месяца
+            # Для этого сначала переходим к следующему месяцу, затем устанавливаем день в 1
+            next_month = now.replace(day=28) + datetime.timedelta(days=4) # Уходим подальше в следующий месяц
+            target_date = next_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        # Если целевая дата уже прошла в текущем месяце (т.е. сейчас, например, 1 октября 00:02, а цель была 1 октября 00:00),
+        # то переносим цель на 1 число следующего месяца.
+        if now > target_date:
+            next_month = now.replace(day=28) + datetime.timedelta(days=4)
+            target_date = next_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        wait_seconds = (target_date - now).total_seconds()
+
+        if wait_seconds < 0:
+            # Если по какой-то причине wait_seconds отрицательный (например, сразу после 00:00),
+            # то ждем до 1-го числа следующего месяца.
+            next_month = now.replace(day=28) + datetime.timedelta(days=4)
+            target_date = next_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            wait_seconds = (target_date - now).total_seconds()
+
+        print(f"Следующий ежемесячный сброс статистики запланирован на {target_date}. Ожидание {wait_seconds:.0f} секунд.")
+        await asyncio.sleep(wait_seconds)
+
+        if config.AUTO_RESET_STATS_MONTHLY:
+            await reset_all_user_statistics_task(bot)
+        else:
+            print("Ежемесячный автосброс статистики отключен. Пропускаю выполнение.")
+
+        # После выполнения задачи (или пропуска), сразу пересчитываем дату для следующего месяца,
+        # чтобы избежать повторного срабатывания в том же цикле для той же даты.
+        # Ждем 1 секунду, чтобы избежать бесконечного цикла, если sleep был очень короткий
+        await asyncio.sleep(1)
+
 
 async def start_background_tasks(bot: Bot):
     asyncio.create_task(check_and_rotate_logs())
     asyncio.create_task(check_new_audio_for_admin_notification(bot))
-    asyncio.create_task(schedule_monthly_reset(bot)) # Запускаем планировщик ежемесячного сброса
-    asyncio.create_task(run_scheduler())
+    asyncio.create_task(monthly_reset_loop(bot)) # Запускаем пользовательский планировщик
