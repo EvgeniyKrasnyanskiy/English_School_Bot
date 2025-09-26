@@ -7,7 +7,7 @@ from utils.data_manager import calculate_overall_score_and_rank
 from utils.word_manager import word_manager
 import datetime
 from utils.audio_converter import convert_single_ogg_to_mp3, check_for_similar_audio_file, convert_all_ogg_to_mp3 # Импорт для админской команды конвертации
-from database import delete_user_from_db, get_all_users, get_game_stats_by_word_set # Импорт get_all_users и get_game_stats_by_word_set
+from database import delete_user_from_db, get_all_users, get_game_stats_by_word_set, reset_all_user_statistics # Импорт get_all_users и get_game_stats_by_word_set
 import html # Import the html module for escaping
 import re # Add this import
 import json # Add this import for json.loads
@@ -59,6 +59,7 @@ CONFIGURABLE_SETTINGS = {
     "MAX_USER_WORDS": {"type": int, "description": "Максимальное количество слов в пользовательском словаре"},
     "CHECK_NEW_AUDIO": {"type": bool, "description": "Проверять наличие новых аудио в папке /sounds/mp3 и уведомлять админа"},
     "DEFAULT_WORD_SET": {"type": str, "description": "Словарь по умолчанию при первом запуске или отсутствии активного"},
+    "AUTO_RESET_STATS_MONTHLY": {"type": bool, "description": "Автоматически сбрасывать статистику пользователей 1 числа каждого месяца"},
 }
 
 @router.message(Command("add"))
@@ -1094,6 +1095,13 @@ async def process_new_setting_value(message: Message, state: FSMContext):
             else:
                 new_value = [] # Empty list if input is empty
         elif expected_type == bool: # Handle boolean type
+            if new_value_str.lower() not in ["true", "false"]:
+                await message.reply(
+                    f"❌ Неверное значение для *{selected_setting}*. Ожидается `True` или `False`.",
+                    parse_mode="Markdown",
+                    reply_markup=cancel_keyboard
+                )
+                return # Do not clear state, allow re-entry
             new_value = new_value_str.lower() == "true"
         else:
             new_value = new_value_str.strip('"') # Treat as string
@@ -1528,3 +1536,36 @@ def _get_display_name(first_name: str | None, last_name: str | None, username: s
     elif registered_name_str and not _is_garbage_name(registered_name_str):
         return html.escape(registered_name_str)
     return "No name"
+
+@router.message(Command("reset_all_stats"))
+async def reset_all_stats_command(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        return
+
+    await message.reply("Вы уверены, что хотите сбросить всю статистику ВСЕХ пользователей (рейтинги, очки, результаты тестов и игр)? Это действие необратимо.", reply_markup=confirm_broadcast_keyboard) # Переиспользуем клавиатуру подтверждения
+    await state.set_state(AdminStates.waiting_for_admin_action)
+
+@router.message(AdminStates.waiting_for_admin_action, F.text == "Да, отправить")
+async def confirm_reset_all_stats(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+
+    await message.reply("Начинаю сброс всей статистики пользователей...", parse_mode="Markdown")
+    success = await reset_all_user_statistics()
+    if success:
+        await message.reply("✅ Вся статистика пользователей успешно сброшена!", reply_markup=main_menu_keyboard)
+    else:
+        await message.reply("❌ Произошла ошибка при сбросе статистики пользователей.", reply_markup=main_menu_keyboard)
+    await state.clear()
+
+@router.message(AdminStates.waiting_for_admin_action, F.text == "Отмена")
+async def cancel_reset_all_stats(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+    await state.clear()
+    await message.reply("Сброс статистики отменен.", reply_markup=main_menu_keyboard)

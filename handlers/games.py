@@ -478,7 +478,7 @@ async def finish_game_and_show_stats(callback: CallbackQuery, state: FSMContext,
     await cleanup_guess_audio(callback.message, state, bot) # Добавлено: Очищаем аудиофайлы игры "Угадай слово"
     await update_last_active(int(user_id))
     # Вместо get_formatted_statistics, вызываем show_statistics_handler для унификации
-    await callback.message.answer("Игра завершена. Вы можете посмотреть свою статистику в главном меню.", reply_markup=main_menu_keyboard)
+    await callback.message.answer("Игра завершена!", reply_markup=main_menu_keyboard)
     await state.clear() # Очищаем состояние после отображения статистики
 
 @router.callback_query(F.data == "play_find_missing_letter_again", Games.quiz_find_missing_letter)

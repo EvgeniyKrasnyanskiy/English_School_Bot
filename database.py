@@ -143,6 +143,23 @@ async def delete_user_from_db(user_id: int) -> bool:
         await db.commit()
         return cursor.rowcount > 0 # Returns True if any row was deleted
 
+async def reset_all_user_statistics() -> bool:
+    """Сбрасывает всю статистику пользователей, связанную с рейтингом и тестами."""
+    async with aiosqlite.connect(DATABASE_NAME) as db:
+        try:
+            # Обнуляем best_test_score и best_test_time в user_data для всех пользователей
+            await db.execute("UPDATE user_data SET best_test_score = 0, best_test_time = ?", (float('inf'),))
+            # Удаляем все записи из таблицы результатов тестов
+            await db.execute("DELETE FROM results")
+            # Удаляем все записи из таблицы статистики игр
+            await db.execute("DELETE FROM games_stats")
+            await db.commit()
+            return True
+        except Exception as e:
+            print(f"Error resetting all user statistics: {e}")
+            return False
+
+
 async def update_user_best_test_time(user_id: int, best_test_time: float):
     async with aiosqlite.connect(DATABASE_NAME) as db:
         await db.execute(

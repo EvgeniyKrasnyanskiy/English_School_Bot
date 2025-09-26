@@ -9,13 +9,15 @@ This is a Telegram bot designed to help users learn English words through variou
 - **Knowledge Tests**: Test your vocabulary with configurable quizzes.
 - **Personalized Word Sets**: Users can create, add words to, and delete their own custom word sets.
 - **Configurable Default Word Set**: Administrators can set a default word set for new users.
+- **Monthly Statistics Reset**: User ranks and scores are automatically reset on the 1st of every month at 00:01 (configurable by admin).
 - **Admin Commands**:
     - Add/delete words from specific or default word sets.
     - View user statistics and active word sets.
     - Manage banned users.
     - Broadcast messages to users or specific classes.
     - Manage audio files (convert OGG to MP3, move, delete).
-    - Configure bot settings via the `/settings` command (e.g., test question count, admin IDs).
+    - Configure bot settings via the `/settings` command (e.g., test question count, admin IDs, auto-reset stats).
+    - Manually reset all user statistics via `/reset_all_stats`.
 - **Multi-part Message Handling**: Long word lists are paginated to avoid Telegram message length limits.
 - **Robust Input Parsing**: Handles flexible spacing in commands and ensures consistent formatting.
 

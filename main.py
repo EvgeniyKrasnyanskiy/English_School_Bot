@@ -7,7 +7,7 @@ from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from logging.handlers import TimedRotatingFileHandler # Импортируем TimedRotatingFileHandler
 
-from config import TOKEN, ADMIN_IDS
+from config import TOKEN, ADMIN_IDS, AUTO_RESET_STATS_MONTHLY
 from database import init_db
 from keyboards import main_menu_keyboard
 from utils.audio_converter import convert_single_ogg_to_mp3

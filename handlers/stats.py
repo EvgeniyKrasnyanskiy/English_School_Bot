@@ -48,17 +48,17 @@ async def show_statistics_handler(message: Message, state: FSMContext, bot: Bot)
 
     # Форматируем отображение
     total_correct_answers_display = (
-        str(total_correct_answers) if total_correct_answers > 0 else "тест не пройден"
+        str(total_correct_answers) if total_correct_answers > 0 else "пройди тест"
     )
     best_test_score_display = (
         f"{best_test_score} из {TEST_QUESTIONS_COUNT}"
         if best_test_score > 0
-        else "тест не пройден"
+        else "пройди тест"
     )
     best_test_time_display = (
         f"{best_test_time:.2f} сек."
         if best_test_time != float("inf") and best_test_time != 999999.0 # Added check for 999999.0
-        else "тест не пройден"
+        else "пройди тест"
     )
 
     # Общая статистика по играм (для рейтинга)
@@ -79,6 +79,7 @@ async def show_statistics_handler(message: Message, state: FSMContext, bot: Bot)
     rank_text = ""
     if current_user_rank_info:
         rank_text = f"\n⭐ *Ваш рейтинг: {current_user_rank_info['rank']} место* (Очки: {current_user_rank_info['overall_score']:.2f})\n"
+        rank_text += "(ℹ️ сбрасывается в конце каждого месяца)\n"
 
     stats_text = f"📊 *Ваша статистика, {user_name_display}:*\n"
     stats_text += rank_text
@@ -130,10 +131,11 @@ async def show_statistics_handler(message: Message, state: FSMContext, bot: Bot)
         stats_text += "\n" # Добавляем пустую строку после статистики тестов по словарям
 
 
-    stats_text += "🎮 *Игры:*\n"
+    stats_text += "🎮 *Игры:*"
     # === Статистика по играм для каждого словаря (для пользователя) ===
     game_stats_by_set = await get_game_stats_by_word_set(user_id)
     if game_stats_by_set:
+        stats_text += "\n" # Добавляем перенос строки для красивого отображения статистики игр
         for word_set, games in game_stats_by_set.items():
             # Убрана замена "default" на "Стандартный словарь", теперь всегда отображается точное имя файла
             display_word_set = word_set 
@@ -153,6 +155,8 @@ async def show_statistics_handler(message: Message, state: FSMContext, bot: Bot)
                 )
                 stats_text += f"    • {translated_game_name}: Всего: {played}, Верно: {correct}, Неверно: {incorrect}{best_time_str}\n"
         stats_text += "\n" # Добавляем пустую строку после статистики игр по словарям
+    else:
+        stats_text += " `поиграй в игры`\n"
 
 
     await message.answer(stats_text, reply_markup=main_menu_keyboard, parse_mode="Markdown")

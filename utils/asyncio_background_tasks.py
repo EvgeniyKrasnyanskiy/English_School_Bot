@@ -4,6 +4,8 @@ import os
 from utils.log_archiver import rotate_logs_monthly
 import config
 from aiogram import Bot # Импортируем Bot для отправки сообщений
+import aioschedule as schedule # Импортируем aioschedule
+from database import reset_all_user_statistics # Импортируем функцию сброса статистики
 
 async def check_and_rotate_logs():
     """
@@ -74,6 +76,45 @@ async def check_new_audio_for_admin_notification(bot: Bot):
         else:
             print("В папках data/sounds/mp3 и data/sounds/ogg новых аудиофайлов не найдено.")
 
+async def schedule_monthly_reset(bot: Bot):
+    """
+    Schedules monthly reset of user statistics.
+    """
+    if config.AUTO_RESET_STATS_MONTHLY:
+        print("Ежемесячный автосброс статистики включен. Планирую сброс на 1 число каждого месяца в 00:01.")
+        schedule.every().day.at("00:01").do(reset_all_user_statistics_task, bot) # Изменено на every().day
+    else:
+        print("Ежемесячный автосброс статистики отключен.")
+
+async def reset_all_user_statistics_task(bot: Bot):
+    # Проверяем, что сегодня 1-е число месяца
+    if datetime.datetime.now().day != 1:
+        print("Сегодня не 1-е число месяца. Пропускаю ежемесячный сброс статистики.")
+        return
+    
+    print("Запускаю ежемесячный сброс статистики пользователей...")
+    success = await reset_all_user_statistics()
+    if success:
+        message_to_send = "✅ Ежемесячный сброс статистики пользователей успешно выполнен! Ваши рейтинги и очки обнулены. Соревнуйтесь снова!"
+        print("Ежемесячный сброс статистики успешно выполнен.")
+    else:
+        message_to_send = "❌ Произошла ошибка при ежемесячном сбросе статистики пользователей."
+        print("Ошибка при ежемесячном сбросе статистики.")
+
+    # Отправляем сообщение всем админам
+    for admin_id in config.ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, message_to_send)
+        except Exception as e:
+            print(f"Не удалось отправить сообщение администратору {admin_id}: {e}")
+
+async def run_scheduler():
+    while True:
+        await schedule.run_pending() # Добавлено await
+        await asyncio.sleep(1) # Проверяем расписание каждую секунду
+
 async def start_background_tasks(bot: Bot):
     asyncio.create_task(check_and_rotate_logs())
     asyncio.create_task(check_new_audio_for_admin_notification(bot))
+    asyncio.create_task(schedule_monthly_reset(bot)) # Запускаем планировщик ежемесячного сброса
+    asyncio.create_task(run_scheduler())
