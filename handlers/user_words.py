@@ -74,7 +74,7 @@ async def my_word_set_command(message: Message, state: FSMContext):
             
             message_text = f"📁 <b>Ваш личный словарь:</b> {html.escape(current_user_file)}\n"
             message_text += f"📊 Количество слов: {info['word_count']} / {MAX_USER_WORDS}\n"
-            message_text += f"⚠️ Примечание: Для этих слов могут отсутствовать картинки и аудио.\n\n"
+            message_text += f"⚠️ Примечание: Для некоторых слов могут отсутствовать картинки и аудио.\n"
     
             if words:
                 message_text += "\nВыберите действие:"
@@ -128,7 +128,7 @@ async def create_my_word_set(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             f"✅ Ваш личный словарь <b>{html.escape(created_filename)}</b> успешно создан!\n"
             f"Ваш словарь пуст ({0} / {MAX_USER_WORDS}). Добавьте слова с помощью кнопки '➕ Добавить слово'.\n\n"
-            f"⚠️ Примечание: Для этих слов могут отсутствовать картинки и аудио.\n\n"
+            f"⚠️ Примечание: Для некоторых слов могут отсутствовать картинки и аудио.\n"
             f"Выберите действие:",
             parse_mode="HTML",
             reply_markup=get_my_set_keyboard(is_personal_set=True, show_list_button_text="📖 Показать список слов")
@@ -422,7 +422,7 @@ async def process_select_file(callback: CallbackQuery, state: FSMContext):
         
         message_text = f"📁 <b>{'Ваш личный словарь:' if is_personal_set else 'Словарь:'}</b> {html.escape(selected_filename)}\n"
         message_text += f"📊 Количество слов: {len(words_in_file)}{f' / {MAX_USER_WORDS}' if is_personal_set else ''}\n"
-        message_text += f"⚠️ Примечание: Для этих слов могут отсутствовать картинки и аудио.\n\n"
+        message_text += f"⚠️ Примечание: Для некоторых слов могут отсутствовать картинки и аудио.\n"
         message_text += "\nВыберите действие:"
         
         await callback.message.edit_text(
@@ -551,7 +551,7 @@ async def toggle_my_word_list_callback(callback: CallbackQuery, state: FSMContex
     if is_personal_set:
         word_count_str += f" / {MAX_USER_WORDS}"
     core_message_prefix += f"📊 Количество слов: {word_count_str}\n"
-    core_message_prefix += f"⚠️ Примечание: Для этих слов могут отсутствовать картинки и аудио.\n\n"
+    core_message_prefix += f"⚠️ Примечание: Для некоторых слов могут отсутствовать картинки и аудио.\n"
 
     if word_list_visible: # If currently visible, hide it
         logger.debug(f"[toggle_my_word_list_callback] Hiding list. Previous message IDs: {previous_message_ids}")

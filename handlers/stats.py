@@ -79,7 +79,7 @@ async def show_statistics_handler(message: Message, state: FSMContext, bot: Bot)
     rank_text = ""
     if current_user_rank_info:
         rank_text = f"\n⭐ *Ваш рейтинг: {current_user_rank_info['rank']} место* (Очки: {current_user_rank_info['overall_score']:.2f})\n"
-        rank_text += "(ℹ️ сбрасывается в конце каждого месяца)\n"
+        rank_text += "  (сбрасывается в конце каждого месяца)\n"
 
     stats_text = f"📊 *Ваша статистика, {user_name_display}:*\n"
     stats_text += rank_text
