@@ -11,7 +11,6 @@ from config import ADMIN_IDS
 from aiogram import Bot
 from utils.word_manager import word_manager # Import word_manager
 import config # Import config
-from utils.data_manager import get_muted_users # Import get_muted_users
 
 router = Router()
 
@@ -104,12 +103,6 @@ async def process_name(message: Message, state: FSMContext, bot: Bot):
 @router.message(Command("msg_to_admin"))
 async def msg_to_admin_command(message: Message, state: FSMContext):
     """Allows users to send a message to the admin."""
-    user_id = message.from_user.id
-    muted_users = await get_muted_users()
-    if user_id in muted_users:
-        await message.answer("Вы не можете отправлять сообщения администратору.")
-        return
-
     await message.answer("Пожалуйста, напишите сообщение, которое вы хотите отправить администратору. Вы можете отправить текст, фото или видео.")
     await state.set_state(Registration.waiting_for_admin_message)
 
