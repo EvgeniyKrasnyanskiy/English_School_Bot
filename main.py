@@ -1,3 +1,6 @@
+import sys
+print(sys.version)
+
 import asyncio
 import logging
 import os

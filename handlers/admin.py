@@ -22,7 +22,7 @@ import uuid # Импорт uuid для генерации уникальных �
 from keyboards import cancel_keyboard_for_filename, confirm_broadcast_keyboard # Импорт клавиатуры для отмены
 from keyboards import main_menu_keyboard # Импорт клавиатуры для отмены
 from keyboards import cancel_keyboard, delete_audio_keyboard, confirm_delete_audio_keyboard, create_file_list_keyboard # Импорт клавиатуры для отмены
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton # Импорт InlineKeyboardMarkup и InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo, InputMediaAudio, InputMediaDocument # Импорт InlineKeyboardMarkup и InlineKeyboardButton
 
 
 class AdminStates(StatesGroup):
@@ -38,6 +38,8 @@ class AdminStates(StatesGroup):
     waiting_for_delete_selection = State() # New state for selecting directory to delete from
     waiting_for_delete_confirmation = State() # New state for confirming deletion
     waiting_for_filename_to_delete = State() # New state for deleting a single audio file
+    waiting_for_content = State() # New state for waiting for content to broadcast
+    waiting_for_content_confirmation = State() # New state for confirming content broadcast
     waiting_for_admin_action = State()
 
 GAME_NAME_TRANSLATIONS = {
@@ -811,6 +813,162 @@ async def confirm_send_message(message: Message, state: FSMContext, bot: Bot):
 
 @router.message(AdminStates.waiting_for_broadcast_text, F.text == "Отмена")
 async def cancel_send_message(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+    await state.clear()
+    await message.reply("Рассылка отменена.", reply_markup=main_menu_keyboard)
+
+
+@router.message(Command("send_content"))
+async def send_content_command(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        return
+
+    args = message.text.split(maxsplit=1)
+    target_class = None
+
+    if len(args) > 1:
+        class_match = re.match(r"class=([\wА-Яа-яЁё\d]+)", args[1].strip(), re.IGNORECASE)
+        if class_match:
+            target_class = class_match.group(1).upper()
+
+    await state.update_data(broadcast_target_class=target_class, broadcast_content=[])
+    await state.set_state(AdminStates.waiting_for_content)
+    
+    msg = "Пожалуйста, отправьте контент (текст, фото, видео, голосовое и т.д.).\nВы можете отправить несколько сообщений или альбом.\nКогда закончите, нажмите кнопку *'Завершить и отправить'*."
+    if target_class:
+        msg += f"\n\nЦелевая аудитория: класс {target_class}"
+    else:
+        msg += "\n\nЦелевая аудитория: ВСЕ пользователи"
+    
+    # Keyboard with "Done" button
+    finish_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Завершить и отправить", callback_data="finish_broadcast_content")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_broadcast_content")]
+    ])
+        
+    await message.reply(msg, parse_mode="Markdown", reply_markup=finish_keyboard)
+
+@router.callback_query(F.data == "cancel_broadcast_content", AdminStates.waiting_for_content)
+async def cancel_broadcast_callback(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.answer("Рассылка отменена.", show_alert=True)
+    await callback.message.edit_text("Рассылка отменена.")
+
+@router.callback_query(F.data == "finish_broadcast_content", AdminStates.waiting_for_content)
+async def finish_broadcast_callback(callback: CallbackQuery, state: FSMContext):
+    state_data = await state.get_data()
+    content_list = state_data.get("broadcast_content", [])
+    
+    if not content_list:
+        await callback.answer("Вы не добавили ни одного сообщения для рассылки.", show_alert=True)
+        return
+
+    target_class = state_data.get("broadcast_target_class")
+    
+    confirmation_message = f"Вы собрали {len(content_list)} сообщений для рассылки.\n\n"
+    if target_class:
+        confirmation_message += f"Будет отправлено пользователям класса: `{target_class}`. Вы уверены?"
+    else:
+        confirmation_message += "Будет отправлено ВСЕМ пользователям. Вы уверены?"
+
+    await state.set_state(AdminStates.waiting_for_content_confirmation)
+    await callback.message.reply(confirmation_message, parse_mode="Markdown", reply_markup=confirm_broadcast_keyboard)
+    await callback.answer()
+
+@router.message(AdminStates.waiting_for_content)
+async def process_content_for_broadcast(message: Message, state: FSMContext, bot: Bot):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+
+    if message.text and message.text.lower() == "отмена": 
+         await state.clear()
+         await message.reply("Рассылка отменена.", reply_markup=main_menu_keyboard)
+         return
+
+    # Add message to the list
+    state_data = await state.get_data()
+    content_list = state_data.get("broadcast_content", [])
+    
+    # Store minimal info needed for copy_message
+    content_list.append({
+        'message_id': message.message_id,
+        'chat_id': message.chat.id,
+        'media_group_id': message.media_group_id
+    })
+    
+    await state.update_data(broadcast_content=content_list)
+    
+    # Optional: Reply with a subtle confirmation or just let them continue
+    # To avoid spamming, we might not reply to every message in an album, 
+    # but since we can't easily detect "end of album" without delay, 
+    # let's just send a "Received" message that deletes itself or update the original message?
+    # Updating original is hard. Let's just be silent or send a temporary message?
+    # Sending a message for every photo in an album is annoying.
+    # Let's just rely on the "Done" button.
+    pass
+
+@router.message(AdminStates.waiting_for_content_confirmation, F.text == "Да, отправить")
+async def confirm_send_content(message: Message, state: FSMContext, bot: Bot):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        await state.clear()
+        return
+
+    state_data = await state.get_data()
+    target_class = state_data.get("broadcast_target_class")
+    content_list = state_data.get("broadcast_content", [])
+
+    if not content_list:
+        await message.reply("Ошибка: контент для рассылки не найден.", reply_markup=main_menu_keyboard)
+        await state.clear()
+        return
+
+    from database import get_all_users
+    all_users = await get_all_users()
+    target_users = []
+
+    for user in all_users:
+        if target_class:
+            if user.get('name') and f" {target_class}" in user['name'].upper():
+                target_users.append(user)
+        else:
+            target_users.append(user)
+    
+    sent_count = 0
+    failed_count = 0
+    
+    status_msg = await message.reply(f"Начинаю рассылку {len(content_list)} сообщений для {len(target_users)} пользователей...")
+
+    for user in target_users:
+        try:
+            # Send all accumulated messages to this user
+            for content_item in content_list:
+                await bot.copy_message(
+                    chat_id=user['user_id'],
+                    from_chat_id=content_item['chat_id'],
+                    message_id=content_item['message_id']
+                )
+                # Small delay between messages to ensure order (though copy_message is usually fast)
+                # and avoid flood limits if sending many messages to one user
+                # await asyncio.sleep(0.05) 
+            
+            sent_count += 1
+            await asyncio.sleep(0.05) # Delay between users
+        except Exception as e:
+            logging.error(f"Не удалось отправить контент пользователю {user['user_id']}: {e}")
+            failed_count += 1
+    
+    await status_msg.edit_text(f"✅ Рассылка завершена! Отправлено: {sent_count}, Не удалось отправить: {failed_count}")
+    await state.clear()
+
+@router.message(AdminStates.waiting_for_content_confirmation, F.text == "Отмена")
+async def cancel_send_content(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         await message.reply("У вас нет прав для выполнения этой команды.")
         await state.clear()

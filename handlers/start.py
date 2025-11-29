@@ -11,11 +11,13 @@ from config import ADMIN_IDS
 from aiogram import Bot
 from utils.word_manager import word_manager # Import word_manager
 import config # Import config
+from utils.data_manager import get_muted_users # Import get_muted_users
 
 router = Router()
 
 class Registration(StatesGroup):
     waiting_for_name = State()
+    waiting_for_admin_message = State() # New state for waiting for user message to admin
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
@@ -98,3 +100,61 @@ async def process_name(message: Message, state: FSMContext, bot: Bot):
         )
 
 # Удалена функция cleanup_old_audio_messages по запросу пользователя
+
+@router.message(Command("msg_to_admin"))
+async def msg_to_admin_command(message: Message, state: FSMContext):
+    """Allows users to send a message to the admin."""
+    user_id = message.from_user.id
+    muted_users = await get_muted_users()
+    if user_id in muted_users:
+        await message.answer("Вы не можете отправлять сообщения администратору.")
+        return
+
+    await message.answer("Пожалуйста, напишите сообщение, которое вы хотите отправить администратору. Вы можете отправить текст, фото или видео.")
+    await state.set_state(Registration.waiting_for_admin_message)
+
+@router.message(Registration.waiting_for_admin_message)
+async def process_admin_message(message: Message, state: FSMContext, bot: Bot):
+    """Processes the message sent by the user to the admin."""
+    if message.text and message.text.lower() == "/cancel":
+        await state.clear()
+        await message.answer("Отправка сообщения отменена.", reply_markup=main_menu_keyboard)
+        return
+
+    user_id = message.from_user.id
+    full_name = message.from_user.full_name or "Unknown"
+    username = f"@{message.from_user.username}" if message.from_user.username else "(no username)"
+    
+    # Get registered name from DB if available, otherwise use full name
+    user_data = await get_user(user_id)
+    registered_name = user_data['name'] if user_data else "Unregistered"
+
+    admin_notification = (
+        f"📩 <b>Новое сообщение от пользователя:</b>\n"
+        f"Имя: {registered_name}\n"
+        f"TG: {full_name} {username}\n"
+        f"ID: <code>{user_id}</code>\n"
+        f"Сообщение:"
+    )
+
+    sent_count = 0
+    if ADMIN_IDS:
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(chat_id=admin_id, text=admin_notification, parse_mode="HTML")
+                # Forward the user's message (using copy_message to keep it clean)
+                await bot.copy_message(
+                    chat_id=admin_id,
+                    from_chat_id=message.chat.id,
+                    message_id=message.message_id
+                )
+                sent_count += 1
+            except Exception:
+                pass # Ignore errors if admin blocked bot or something
+
+    if sent_count > 0:
+        await message.answer("✅ Ваше сообщение успешно отправлено администратору!", reply_markup=main_menu_keyboard)
+    else:
+        await message.answer("❌ Не удалось отправить сообщение. Попробуйте позже.", reply_markup=main_menu_keyboard)
+    
+    await state.clear()
