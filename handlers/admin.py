@@ -7,7 +7,7 @@ from utils.data_manager import calculate_overall_score_and_rank
 from utils.word_manager import word_manager
 import datetime
 from utils.audio_converter import convert_single_ogg_to_mp3, check_for_similar_audio_file, convert_all_ogg_to_mp3 # Импорт для админской команды конвертации
-from database import delete_user_from_db, get_all_users, get_game_stats_by_word_set, reset_all_user_statistics # Импорт get_all_users и get_game_stats_by_word_set
+from database import delete_user_from_db, get_all_users, get_game_stats_by_word_set, reset_all_user_statistics, mute_user, unmute_user # Импорт get_all_users и get_game_stats_by_word_set
 import html # Import the html module for escaping
 import re # Add this import
 import json # Add this import for json.loads
@@ -1727,3 +1727,48 @@ async def cancel_reset_all_stats(message: Message, state: FSMContext):
         return
     await state.clear()
     await message.reply("Сброс статистики отменен.", reply_markup=main_menu_keyboard)
+
+@router.message(Command("mute"))
+async def mute_user_command(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        return
+
+    args = message.text.split()
+    if len(args) < 3:
+        await message.reply("Пожалуйста, используйте формат: /mute USER_ID HOURS")
+        return
+
+    try:
+        user_id = int(args[1])
+        hours = float(args[2])
+    except ValueError:
+        await message.reply("ID пользователя и количество часов должны быть числами.")
+        return
+
+    if await mute_user(user_id, hours):
+        await message.reply(f"Пользователь {user_id} заглушен на {hours} часов.")
+    else:
+        await message.reply(f"Не удалось заглушить пользователя {user_id}.")
+
+@router.message(Command("unmute"))
+async def unmute_user_command(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("У вас нет прав для выполнения этой команды.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("Пожалуйста, используйте формат: /unmute USER_ID")
+        return
+
+    try:
+        user_id = int(args[1])
+    except ValueError:
+        await message.reply("ID пользователя должен быть числом.")
+        return
+
+    if await unmute_user(user_id):
+        await message.reply(f"Пользователь {user_id} разглушен.")
+    else:
+        await message.reply(f"Не удалось разглушить пользователя {user_id}.")

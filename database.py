@@ -15,8 +15,9 @@ async def init_db():
         await _add_column_if_not_exists(db, "users", "first_name", "TEXT")
         await _add_column_if_not_exists(db, "users", "last_name", "TEXT")
         await _add_column_if_not_exists(db, "users", "username", "TEXT")
-        await _add_column_if_not_exists(db, "games_stats", "word_set_name", "TEXT NOT NULL DEFAULT 'default'") # New column
-        await _add_column_if_not_exists(db, "results", "word_set_name", "TEXT NOT NULL DEFAULT 'default'") # New column
+        await _add_column_if_not_exists(db, "users", "mute_until", "TEXT")
+        await _add_column_if_not_exists(db, "games_stats", "word_set_name", "TEXT NOT NULL DEFAULT 'default'")
+        await _add_column_if_not_exists(db, "results", "word_set_name", "TEXT NOT NULL DEFAULT 'default'")
 
 async def _add_column_if_not_exists(db, table_name, column_name, column_type):
     cursor = await db.execute(f"PRAGMA table_info({table_name})")
@@ -347,3 +348,43 @@ async def get_user_display_name(user_id: int) -> str:
             return bot_name
         else:
             return "Пользователь"
+
+async def mute_user(user_id: int, hours: float) -> bool:
+    """Mutes a user for a specified number of hours."""
+    async with aiosqlite.connect(DATABASE_NAME) as db:
+        mute_until = (datetime.datetime.now() + datetime.timedelta(hours=hours)).isoformat()
+        try:
+            await db.execute("UPDATE users SET mute_until = ? WHERE user_id = ?", (mute_until, user_id))
+            await db.commit()
+            return True
+        except Exception as e:
+            print(f"Error muting user {user_id}: {e}")
+            return False
+
+async def unmute_user(user_id: int) -> bool:
+    """Unmutes a user."""
+    async with aiosqlite.connect(DATABASE_NAME) as db:
+        try:
+            await db.execute("UPDATE users SET mute_until = NULL WHERE user_id = ?", (user_id,))
+            await db.commit()
+            return True
+        except Exception as e:
+            print(f"Error unmuting user {user_id}: {e}")
+            return False
+
+async def get_user_mute_status(user_id: int) -> datetime.datetime | None:
+    """Returns the datetime until which the user is muted, or None if not muted."""
+    async with aiosqlite.connect(DATABASE_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT mute_until FROM users WHERE user_id = ?", (user_id,))
+        row = await cursor.fetchone()
+        
+        if row and row['mute_until']:
+            try:
+                mute_until = datetime.datetime.fromisoformat(row['mute_until'])
+                if mute_until > datetime.datetime.now():
+                    return mute_until
+            except ValueError:
+                pass # Invalid date format, treat as not muted
+        
+        return None

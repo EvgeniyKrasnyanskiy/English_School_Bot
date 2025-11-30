@@ -11,7 +11,7 @@ from aiogram.fsm.context import FSMContext
 from logging.handlers import TimedRotatingFileHandler # Импортируем TimedRotatingFileHandler
 
 from config import TOKEN, ADMIN_IDS, AUTO_RESET_STATS_MONTHLY
-from database import init_db
+from database import init_db, get_user_mute_status
 from keyboards import main_menu_keyboard
 from utils.audio_converter import convert_single_ogg_to_mp3
 from utils.audio_cleanup import cleanup_guess_audio
@@ -57,6 +57,12 @@ async def main():
         if user_id in await get_banned_users():
             await event.answer("Вы заблокированы и не можете использовать этого бота.")
             return # Stop propagation for banned users
+        
+        mute_until = await get_user_mute_status(user_id)
+        if mute_until:
+            await event.answer(f"Вы временно заглушены до {mute_until.strftime('%d.%m.%Y %H:%M')}.")
+            return
+
         return await handler(event, data) # Continue processing for non-banned users
 
     @dp.message(F.text == "⬆️ В главное меню", F.fsm_state == None)
