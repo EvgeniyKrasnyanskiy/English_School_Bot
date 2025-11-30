@@ -4,7 +4,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from database import add_user, get_user, update_last_active
+from database import add_user, get_user, update_last_active, get_user_mute_status
 from keyboards import main_menu_keyboard
 from utils.data_manager import update_user_profile_data
 from config import ADMIN_IDS
@@ -103,6 +103,14 @@ async def process_name(message: Message, state: FSMContext, bot: Bot):
 @router.message(Command("msg_to_admin"))
 async def msg_to_admin_command(message: Message, state: FSMContext):
     """Allows users to send a message to the admin."""
+    user_id = message.from_user.id
+    
+    # Check if user is muted
+    mute_until = await get_user_mute_status(user_id)
+    if mute_until:
+        await message.answer(f"Вы временно заглушены до {mute_until.strftime('%d.%m.%Y %H:%M')} и не можете отправлять сообщения администратору.")
+        return
+    
     await message.answer("Пожалуйста, напишите сообщение, которое вы хотите отправить администратору. Вы можете отправить текст, фото или видео.")
     await state.set_state(Registration.waiting_for_admin_message)
 
