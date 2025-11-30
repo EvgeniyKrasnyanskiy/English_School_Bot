@@ -1735,19 +1735,23 @@ async def mute_user_command(message: Message):
         return
 
     args = message.text.split()
-    if len(args) < 3:
-        await message.reply("Пожалуйста, используйте формат: /mute USER_ID HOURS")
+    if len(args) < 2:
+        await message.reply("Пожалуйста, используйте формат: /mute USER_ID [HOURS]\nЕсли часы не указаны, мьют будет перманентным.")
         return
 
     try:
         user_id = int(args[1])
-        hours = float(args[2])
+        # If hours not provided, use None for permanent mute
+        hours = float(args[2]) if len(args) >= 3 else None
     except ValueError:
         await message.reply("ID пользователя и количество часов должны быть числами.")
         return
 
     if await mute_user(user_id, hours):
-        await message.reply(f"Пользователь {user_id} заглушен на {hours} часов.")
+        if hours is None:
+            await message.reply(f"Пользователь {user_id} заглушен перманентно.")
+        else:
+            await message.reply(f"Пользователь {user_id} заглушен на {hours} часов.")
     else:
         await message.reply(f"Не удалось заглушить пользователя {user_id}.")
 

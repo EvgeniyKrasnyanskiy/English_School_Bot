@@ -332,7 +332,6 @@ async def get_user_display_name(user_id: int) -> str:
         if not user:
             return "Пользователь"
 
-        # Приоритет: Telegram полное имя -> username -> имя в боте -> Дефолт
         first_name = user['first_name'] or ''
         last_name = user['last_name'] or ''
         username = user['username'] or ''
@@ -349,10 +348,14 @@ async def get_user_display_name(user_id: int) -> str:
         else:
             return "Пользователь"
 
-async def mute_user(user_id: int, hours: float) -> bool:
-    """Mutes a user for a specified number of hours."""
+async def mute_user(user_id: int, hours: float | None) -> bool:
+    """Mutes a user for a specified number of hours, or permanently if hours is None."""
     async with aiosqlite.connect(DATABASE_NAME) as db:
-        mute_until = (datetime.datetime.now() + datetime.timedelta(hours=hours)).isoformat()
+        if hours is None:
+            mute_until = "9999-12-31T23:59:59"
+        else:
+            mute_until = (datetime.datetime.now() + datetime.timedelta(hours=hours)).isoformat()
+        
         try:
             await db.execute("UPDATE users SET mute_until = ? WHERE user_id = ?", (mute_until, user_id))
             await db.commit()
@@ -385,6 +388,6 @@ async def get_user_mute_status(user_id: int) -> datetime.datetime | None:
                 if mute_until > datetime.datetime.now():
                     return mute_until
             except ValueError:
-                pass # Invalid date format, treat as not muted
+                pass
         
         return None
